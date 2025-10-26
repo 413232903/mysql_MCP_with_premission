@@ -27,16 +27,18 @@ def register_metadata_tools(mcp: FastMCP):
     @mcp.tool()
     @MetadataToolBase.handle_query_error
     async def mysql_show_tables(database: Optional[str] = None, pattern: Optional[str] = None,
-                               limit: int = 100, exclude_views: bool = False) -> str:
+                               limit: int = 100, exclude_views: bool = False,
+                               user_id: Optional[str] = None) -> str:
         """
         获取数据库中的表列表，支持筛选和限制结果数量
-        
+
         Args:
             database: 数据库名称 (可选，默认使用当前连接的数据库)
             pattern: 表名匹配模式 (可选, 例如 '%user%')
             limit: 返回结果的最大数量 (默认100，设为0表示无限制)
             exclude_views: 是否排除视图 (默认为False)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             表列表的JSON字符串
         """
@@ -72,7 +74,7 @@ def register_metadata_tools(mcp: FastMCP):
         
         # 执行查询 - 使用异步上下文管理器
         async with get_db_connection() as connection:
-            results = await execute_query(connection, base_query)
+            results = await execute_query(connection, base_query, user_id=user_id)
             
             # 如果需要排除视图，且使用的是SHOW FULL TABLES
             if exclude_views and "FULL" in base_query:
@@ -150,14 +152,16 @@ def register_metadata_tools(mcp: FastMCP):
     
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_columns(table: str, database: Optional[str] = None) -> str:
+    async def mysql_show_columns(table: str, database: Optional[str] = None,
+                                 user_id: Optional[str] = None) -> str:
         """
         获取表的列信息
-        
+
         Args:
             table: 表名
             database: 数据库名称 (可选，默认使用当前连接的数据库)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             表列信息的JSON字符串
         """
@@ -177,19 +181,21 @@ def register_metadata_tools(mcp: FastMCP):
             
         query = f"SHOW COLUMNS FROM `{table}`" if not database else f"SHOW COLUMNS FROM `{database}`.`{table}`"
         logger.debug(f"执行查询: {query}")
-        
-        return await MetadataToolBase.execute_metadata_query(query, operation_type="表列信息查询")
+
+        return await MetadataToolBase.execute_metadata_query(query, operation_type="表列信息查询", user_id=user_id)
 
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_describe_table(table: str, database: Optional[str] = None) -> str:
+    async def mysql_describe_table(table: str, database: Optional[str] = None,
+                                   user_id: Optional[str] = None) -> str:
         """
         描述表结构
-        
+
         Args:
             table: 表名
             database: 数据库名称 (可选，默认使用当前连接的数据库)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             表结构描述的JSON字符串
         """
@@ -209,19 +215,21 @@ def register_metadata_tools(mcp: FastMCP):
             
         query = f"DESCRIBE `{table}`" if not database else f"DESCRIBE `{database}`.`{table}`"
         logger.debug(f"执行查询: {query}")
-        
-        return await MetadataToolBase.execute_metadata_query(query, operation_type="表结构描述查询")
+
+        return await MetadataToolBase.execute_metadata_query(query, operation_type="表结构描述查询", user_id=user_id)
 
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_create_table(table: str, database: Optional[str] = None) -> str:
+    async def mysql_show_create_table(table: str, database: Optional[str] = None,
+                                      user_id: Optional[str] = None) -> str:
         """
         获取表的创建语句
-        
+
         Args:
             table: 表名
             database: 数据库名称 (可选，默认使用当前连接的数据库)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             表创建语句的JSON字符串
         """
@@ -242,5 +250,5 @@ def register_metadata_tools(mcp: FastMCP):
         table_ref = f"`{table}`" if not database else f"`{database}`.`{table}`"
         query = f"SHOW CREATE TABLE {table_ref}"
         logger.debug(f"执行查询: {query}")
-        
-        return await MetadataToolBase.execute_metadata_query(query, operation_type="表创建语句查询")
+
+        return await MetadataToolBase.execute_metadata_query(query, operation_type="表创建语句查询", user_id=user_id)

@@ -90,8 +90,8 @@ Copy `.env.example` to `.env` and modify as needed.
 ```bash
 python -m src.server
 ```
-默认监听：http://127.0.0.1:3000/sse
-Default endpoint: http://127.0.0.1:3000/sse
+默认监听：http://127.0.0.1:3000/sse2
+Default endpoint: http://127.0.0.1:3000/sse2
 
 ---
 

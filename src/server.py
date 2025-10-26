@@ -49,7 +49,7 @@ logger.debug(f"服务器配置: host={host}, port={port}")
 
 # 创建MCP服务器实例
 logger.debug("正在创建MCP服务器实例...")
-mcp = FastMCP("MySQL Query Server", "cccccccccc", host=host, port=port, debug=True, endpoint='/sse')
+mcp = FastMCP("MySQL Query Server", "cccccccccc", host=host, port=port, debug=True, endpoint='/sse2')
 logger.debug("MCP服务器实例创建完成")
 
 def auto_register_tools(mcp):
@@ -170,9 +170,9 @@ async def init_database():
 def start_server():
     """启动SSE服务器的同步包装器"""
     logger.debug("开始启动MySQL查询服务器...")
-    
+
     print(f"开始启动MySQL查询SSE服务器...")
-    print(f"服务器监听在 {host}:{port}/sse")
+    print(f"服务器监听在 {host}:{port}/sse2")
     
     try:
         # 检查MySQL配置是否有效并初始化连接池
@@ -182,8 +182,8 @@ def start_server():
             _server_data['loop'].run_until_complete(init_database())
         
         # 使用run_app函数启动服务器
-        logger.debug("调用mcp.run('sse')启动服务器...")
-        mcp.run('sse')
+        logger.debug("调用mcp.run('sse2')启动服务器...")
+        mcp.run('sse2')
     except Exception as e:
         logger.exception(f"服务器运行时发生错误: {str(e)}")
         print(f"服务器运行时发生错误: {str(e)}")

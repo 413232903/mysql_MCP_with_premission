@@ -16,32 +16,35 @@ from src.validators import SQLValidators
 logger = logging.getLogger("mysql_server")
 
 async def execute_schema_query(
-    query: str, 
-    params: Optional[Dict[str, Any]] = None, 
+    query: str,
+    params: Optional[Dict[str, Any]] = None,
     operation_type: str = "元数据查询",
     stream_results: bool = False,
-    batch_size: int = 1000
+    batch_size: int = 1000,
+    user_id: Optional[str] = None
 ) -> str:
     """
     执行表结构查询
-    
+
     Args:
         query: SQL查询语句
         params: 查询参数 (可选)
         operation_type: 操作类型描述
         stream_results: 是否使用流式处理获取大型结果集
         batch_size: 批处理大小，分批获取结果时的每批记录数量
-        
+        user_id: 用户ID，用于权限控制 (可选)
+
     Returns:
         查询结果的JSON字符串
     """
     async with get_db_connection() as connection:
         results = await execute_query(
-            connection, 
-            query, 
-            params, 
-            batch_size=batch_size, 
-            stream_results=stream_results
+            connection,
+            query,
+            params,
+            batch_size=batch_size,
+            stream_results=stream_results,
+            user_id=user_id
         )
         return MetadataToolBase.format_results(results, operation_type)
 
@@ -56,14 +59,16 @@ def register_schema_tools(mcp: FastMCP):
     
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_indexes(table: str, database: Optional[str] = None) -> str:
+    async def mysql_show_indexes(table: str, database: Optional[str] = None,
+                                 user_id: Optional[str] = None) -> str:
         """
         获取表的索引信息
-        
+
         Args:
             table: 表名
             database: 数据库名称 (可选，默认使用当前连接的数据库)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             表索引信息的JSON字符串
         """
@@ -87,18 +92,20 @@ def register_schema_tools(mcp: FastMCP):
         logger.debug(f"执行查询: {query}")
         
         # 执行查询
-        return await execute_schema_query(query, operation_type="表索引查询")
-    
+        return await execute_schema_query(query, operation_type="表索引查询", user_id=user_id)
+
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_table_status(database: Optional[str] = None, like_pattern: Optional[str] = None) -> str:
+    async def mysql_show_table_status(database: Optional[str] = None, like_pattern: Optional[str] = None,
+                                      user_id: Optional[str] = None) -> str:
         """
         获取表状态信息
-        
+
         Args:
             database: 数据库名称 (可选，默认使用当前连接的数据库)
             like_pattern: 表名匹配模式 (可选，例如 '%user%')
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             表状态信息的JSON字符串
         """
@@ -127,20 +134,22 @@ def register_schema_tools(mcp: FastMCP):
             query += f" LIKE '{like_pattern}'"
             
         logger.debug(f"执行查询: {query}")
-        
+
         # 执行查询
-        return await execute_schema_query(query, operation_type="表状态查询")
-    
+        return await execute_schema_query(query, operation_type="表状态查询", user_id=user_id)
+
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_foreign_keys(table: str, database: Optional[str] = None) -> str:
+    async def mysql_show_foreign_keys(table: str, database: Optional[str] = None,
+                                      user_id: Optional[str] = None) -> str:
         """
         获取表的外键约束信息
-        
+
         Args:
             table: 表名
             database: 数据库名称 (可选，默认使用当前连接的数据库)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             表外键约束信息的JSON字符串
         """
@@ -163,7 +172,7 @@ def register_schema_tools(mcp: FastMCP):
         if not db_name:
             # 获取当前数据库 - 使用异步上下文管理器
             async with get_db_connection() as connection:
-                current_db_results = await execute_query(connection, "SELECT DATABASE() as db")
+                current_db_results = await execute_query(connection, "SELECT DATABASE() as db", user_id=user_id)
                 if current_db_results and 'db' in current_db_results[0]:
                     db_name = current_db_results[0]['db']
         
@@ -197,21 +206,23 @@ def register_schema_tools(mcp: FastMCP):
         
         logger.debug(f"执行外键查询: {query}")
         logger.debug(f"参数: {params}")
-        
+
         # 执行查询
-        return await execute_schema_query(query, params, operation_type="表外键查询")
-    
+        return await execute_schema_query(query, params, operation_type="表外键查询", user_id=user_id)
+
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_paginate_results(query: str, page: int = 1, page_size: int = 50) -> str:
+    async def mysql_paginate_results(query: str, page: int = 1, page_size: int = 50,
+                                     user_id: Optional[str] = None) -> str:
         """
         分页执行查询以处理大型结果集
-        
+
         Args:
             query: SQL查询语句
             page: 页码 (从1开始)
             page_size: 每页记录数 (默认50)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             分页结果的JSON字符串
         """
@@ -248,17 +259,17 @@ def register_schema_tools(mcp: FastMCP):
             # 确认查询安全性 - 限制查询类型，只允许SELECT查询
             if not base_query.strip().upper().startswith('SELECT'):
                 raise ValueError("只支持SELECT查询进行分页")
-                
+
             # 使用普通查询获取当前页结果（不需要流式处理，因为已经有LIMIT限制）
-            results = await execute_query(connection, paginated_query)
-            
+            results = await execute_query(connection, paginated_query, user_id=user_id)
+
             # 尝试获取总记录数 - 对于大型结果集使用流式处理
             try:
                 # 由于无法参数化子查询，我们改为构建一个只返回计数的查询
                 # 这仍有SQL注入风险，但我们已经验证查询只能是SELECT
                 count_query = f"SELECT COUNT(*) as total FROM ({base_query}) as subquery"
                 # 计数查询通常只返回一行，不需要流式处理
-                count_results = await execute_query(connection, count_query)
+                count_results = await execute_query(connection, count_query, user_id=user_id)
                 total = count_results[0]['total'] if count_results else 0
                 
                 # 根据总记录数计算是否是大型结果集

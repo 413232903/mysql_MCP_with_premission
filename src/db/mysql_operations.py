@@ -11,6 +11,7 @@ from ..config import DatabaseConfig, SecurityConfig, SQLConfig, ConnectionPoolCo
 from ..security.sql_analyzer import SQLOperationType
 from ..security.interceptor import SQLInterceptor, SecurityException
 from ..security.sql_parser import SQLParser
+from ..security.role_permission import get_role_permission_manager
 
 logger = logging.getLogger("mysql_server")
 
@@ -341,21 +342,23 @@ def normalize_result(result_rows):
         
     return [dict(row) for row in result_rows]
 
-async def execute_query(connection, query: str, params: Optional[Dict[str, Any]] = None, 
-                   batch_size: int = 1000, stream_results: bool = False) -> List[Dict[str, Any]]:
+async def execute_query(connection, query: str, params: Optional[Dict[str, Any]] = None,
+                   batch_size: int = 1000, stream_results: bool = False,
+                   user_id: Optional[str] = None) -> List[Dict[str, Any]]:
     """
     在给定的数据库连接上执行查询
-    
+
     Args:
         connection: 数据库连接
         query: SQL查询语句
         params: 查询参数 (可选)
         batch_size: 批处理大小，控制每次从游标获取的记录数量 (仅当stream_results=True时有效)
         stream_results: 是否使用流式处理获取大型结果集
-        
+        user_id: 用户ID，用于角色权限控制 (可选)
+
     Returns:
         查询结果列表，如果是修改操作则返回影响的行数
-        
+
     Raises:
         SecurityException: 当操作被安全机制拒绝时
         ValueError: 当查询执行失败时
@@ -363,28 +366,32 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
     cursor = None
     parsed_sql = None  # 初始化SQL解析结果
     start_time = time.time()  # 记录查询开始时间
-    
+
     try:
+        # 应用角色权限过滤
+        permission_manager = get_role_permission_manager()
+        filtered_query = permission_manager.inject_permission_filter(query, user_id)
+
         # 安全检查
-        if not await sql_interceptor.check_operation(query):
+        if not await sql_interceptor.check_operation(filtered_query):
             raise SecurityException("操作被安全机制拒绝")
             
         # 创建异步游标，支持字典结果
         cursor = await connection.cursor(aiomysql.DictCursor)
-        
-        # 执行查询 - 异步执行
+
+        # 执行查询 - 异步执行（使用过滤后的查询）
         if params:
             # 检查参数类型并转换为适合aiomysql的格式
             if isinstance(params, dict):
                 # 构建使用%(key)s格式的查询
-                await cursor.execute(query, params)
+                await cursor.execute(filtered_query, params)
             else:
-                await cursor.execute(query, params)
+                await cursor.execute(filtered_query, params)
         else:
-            await cursor.execute(query)
-        
+            await cursor.execute(filtered_query)
+
         # 解析SQL语句获取操作类型
-        parsed_sql = SQLParser.parse_query(query)
+        parsed_sql = SQLParser.parse_query(filtered_query)
         operation = parsed_sql['operation_type']
         
         # 对于修改操作，提交事务并返回影响的行数
@@ -396,7 +403,7 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
             
             # 记录查询执行时间
             execution_time = time.time() - start_time
-            _log_query_performance(query, execution_time, operation)
+            _log_query_performance(filtered_query, execution_time, operation)
             
             return [{'affected_rows': affected_rows}]
         
@@ -434,7 +441,7 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
             
             # 记录查询执行时间
             execution_time = time.time() - start_time
-            _log_query_performance(query, execution_time, operation)
+            _log_query_performance(filtered_query, execution_time, operation)
             
             return metadata_results
         
@@ -465,7 +472,7 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
             
             # 记录查询执行时间
             execution_time = time.time() - start_time
-            _log_query_performance(query, execution_time, operation)
+            _log_query_performance(filtered_query, execution_time, operation)
             
             return all_results
         else:
@@ -479,7 +486,7 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
             
             # 记录查询执行时间
             execution_time = time.time() - start_time
-            _log_query_performance(query, execution_time, operation)
+            _log_query_performance(filtered_query, execution_time, operation)
             
             return dict_results
             

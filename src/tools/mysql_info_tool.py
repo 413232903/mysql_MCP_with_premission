@@ -143,15 +143,17 @@ def register_info_tools(mcp: FastMCP):
     
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_databases(pattern: Optional[str] = None, limit: int = 100, exclude_system: bool = True) -> str:
+    async def mysql_show_databases(pattern: Optional[str] = None, limit: int = 100, exclude_system: bool = True,
+                                   user_id: Optional[str] = None) -> str:
         """
         获取所有数据库列表，支持筛选和限制结果数量
-        
+
         Args:
             pattern: 数据库名称匹配模式 (可选, 例如 '%test%')
             limit: 返回结果的最大数量 (默认100，设为0表示无限制)
             exclude_system: 是否排除系统数据库 (默认为True)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             数据库列表的JSON字符串
         """
@@ -183,7 +185,7 @@ def register_info_tools(mcp: FastMCP):
         # 执行查询 - 使用异步上下文管理器，不要求预先指定数据库
         async with get_db_connection(require_database=False) as connection:
             # 先获取所有数据库
-            results = await execute_query(connection, query)
+            results = await execute_query(connection, query, user_id=user_id)
             
             # 通常结果中每个数据库名会在"Database"字段
             db_field = next((k for k in results[0].keys() if k.lower() == 'database'), None) if results else None
@@ -235,14 +237,16 @@ def register_info_tools(mcp: FastMCP):
     
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_variables(pattern: Optional[str] = None, global_scope: bool = False) -> str:
+    async def mysql_show_variables(pattern: Optional[str] = None, global_scope: bool = False,
+                                   user_id: Optional[str] = None) -> str:
         """
         获取MySQL系统变量
-        
+
         Args:
             pattern: 变量名称匹配模式 (可选, 例如 '%buffer%')
             global_scope: 是否查询全局变量 (默认为会话变量)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             系统变量的JSON字符串
         """
@@ -269,26 +273,28 @@ def register_info_tools(mcp: FastMCP):
             query += f" LIKE '{pattern}'"
             
         logger.debug(f"执行查询: {query}")
-        
+
         async with get_db_connection() as connection:
-            results = await execute_query(connection, query)
-            
+            results = await execute_query(connection, query, user_id=user_id)
+
             # 生产环境中过滤敏感信息
             if env_type == EnvironmentType.PRODUCTION:
                 results = filter_sensitive_info(results)
-                
+
             return MetadataToolBase.format_results(results, operation_type="系统变量查询")
-    
+
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_show_status(pattern: Optional[str] = None, global_scope: bool = False) -> str:
+    async def mysql_show_status(pattern: Optional[str] = None, global_scope: bool = False,
+                                user_id: Optional[str] = None) -> str:
         """
         获取MySQL服务器状态
-        
+
         Args:
             pattern: 状态名称匹配模式 (可选, 例如 '%conn%')
             global_scope: 是否查询全局状态 (默认为会话状态)
-            
+            user_id: 用户ID，用于权限控制（可选）
+
         Returns:
             服务器状态的JSON字符串
         """
@@ -315,12 +321,12 @@ def register_info_tools(mcp: FastMCP):
             query += f" LIKE '{pattern}'"
             
         logger.debug(f"执行查询: {query}")
-        
+
         async with get_db_connection() as connection:
-            results = await execute_query(connection, query)
-            
+            results = await execute_query(connection, query, user_id=user_id)
+
             # 生产环境中过滤敏感信息
             if env_type == EnvironmentType.PRODUCTION:
                 results = filter_sensitive_info(results)
-                
+
             return MetadataToolBase.format_results(results, operation_type="服务器状态查询") 

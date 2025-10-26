@@ -128,13 +128,40 @@ class SQLConfig:
     DDL_OPERATIONS = {
         'CREATE', 'ALTER', 'DROP', 'TRUNCATE', 'RENAME'
     }
-    
+
     DML_OPERATIONS = {
         'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'MERGE'
     }
-    
+
     # 元数据操作集合
     METADATA_OPERATIONS = {
-        'SHOW', 'DESC', 'DESCRIBE', 'EXPLAIN', 'HELP', 
+        'SHOW', 'DESC', 'DESCRIBE', 'EXPLAIN', 'HELP',
         'ANALYZE', 'CHECK', 'CHECKSUM', 'OPTIMIZE'
-    } 
+    }
+
+# 角色权限配置
+class RolePermissionConfig:
+    """角色权限控制配置"""
+    # 是否启用角色权限控制
+    ENABLE_ROLE_PERMISSION = os.getenv('ENABLE_ROLE_PERMISSION', 'false').lower() in ('true', 'yes', '1')
+
+    # 需要应用权限过滤的表列表（逗号分隔）
+    PERMISSION_TABLES_STR = os.getenv('PERMISSION_TABLES', '')
+    PERMISSION_TABLES = set(
+        table.strip() for table in PERMISSION_TABLES_STR.split(',') if table.strip()
+    )
+
+    # 权限字段名称（默认 gssq）
+    PERMISSION_FIELD = os.getenv('PERMISSION_FIELD', 'gssq')
+
+    # 用户角色表配置
+    USER_ROLE_TABLE = os.getenv('USER_ROLE_TABLE', 'fr_user_role')
+    USER_ROLE_USERNAME_FIELD = os.getenv('USER_ROLE_USERNAME_FIELD', 'username')
+    USER_ROLE_EXTEND_FIELD = os.getenv('USER_ROLE_EXTEND_FIELD', 'extend1')
+    USER_ROLE_PREFIX = os.getenv('USER_ROLE_PREFIX', 'RX')
+
+    # 超级管理员豁免（逗号分隔的用户名列表）
+    SUPER_ADMIN_USERS_STR = os.getenv('SUPER_ADMIN_USERS', '')
+    SUPER_ADMIN_USERS = set(
+        user.strip() for user in SUPER_ADMIN_USERS_STR.split(',') if user.strip()
+    ) 

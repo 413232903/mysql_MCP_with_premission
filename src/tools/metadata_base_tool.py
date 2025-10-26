@@ -112,22 +112,24 @@ class MetadataToolBase:
         return wrapper
         
     @staticmethod
-    async def execute_metadata_query(query: str, params: Optional[Dict[str, Any]] = None, 
-                                    operation_type: str = "元数据查询") -> str:
+    async def execute_metadata_query(query: str, params: Optional[Dict[str, Any]] = None,
+                                    operation_type: str = "元数据查询",
+                                    user_id: Optional[str] = None) -> str:
         """
         执行元数据查询并返回格式化结果
-        
+
         Args:
             query: SQL查询语句
             params: 查询参数 (可选)
             operation_type: 操作类型描述
-            
+            user_id: 用户ID，用于权限控制 (可选)
+
         Returns:
             查询结果的JSON字符串
         """
         try:
             async with get_db_connection() as connection:
-                results = await execute_query(connection, query, params)
+                results = await execute_query(connection, query, params, user_id=user_id)
                 return MetadataToolBase.format_results(results, operation_type)
         except Exception as e:
             logger.error(f"元数据查询执行失败: {str(e)}")
