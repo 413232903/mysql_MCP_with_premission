@@ -24,6 +24,8 @@ security/ (安全拦截层 - SQL检查、数据库隔离)
 
 **服务器入口** (`src/server.py`):
 - 使用 FastMCP 框架创建 SSE 服务器
+- **SSE 路径配置**: 使用 `sse_path='/sse2'` 参数配置 SSE 端点路径
+- **传输协议**: 使用 `mcp.run('sse')` 启动 SSE 传输模式
 - **自动工具注册**: 通过 `auto_register_tools()` 扫描 `src/tools/` 目录，自动注册所有 `register_*_tool(s)` 函数
 - 新增工具时只需在 `src/tools/` 下实现 `register_xxx_tool(s)` 函数，无需修改 server.py
 - 启动连接池定时回收任务（每5分钟）
@@ -86,6 +88,8 @@ python -m src.server
 ```
 
 服务器将监听在 `http://127.0.0.1:3000/sse2` (默认配置)
+
+**注意**: FastMCP 框架使用 `sse_path` 参数配置 SSE 路径，不是 `endpoint`。
 
 ### Docker 部署
 
