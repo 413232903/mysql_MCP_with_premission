@@ -43,13 +43,43 @@ except ImportError as e:
     mysql_available = False
 
 # 从配置获取服务器配置
+def _normalize_path(path: str, *, allow_root: bool = False) -> str:
+    """确保路径包含前导斜杠并移除多余的尾部斜杠"""
+    if not path:
+        return '/' if allow_root else '/sse'
+    path = path.strip()
+    if not path.startswith('/'):
+        path = '/' + path
+    if len(path) > 1:
+        path = path.rstrip('/')
+    if not allow_root and path == '/':
+        raise ValueError("SSE 路径不能为根路径 '/'，请指定具体子路径，如 '/sse2'")
+    return path
+
 host = ServerConfig.HOST
 port = ServerConfig.PORT
-logger.debug(f"服务器配置: host={host}, port={port}")
+mount_path = _normalize_path(ServerConfig.MOUNT_PATH, allow_root=True)
+sse_path = _normalize_path(ServerConfig.SSE_PATH)
+
+logger.debug(
+    "服务器配置: host=%s, port=%s, mount_path=%s, sse_path=%s",
+    host,
+    port,
+    mount_path,
+    sse_path,
+)
 
 # 创建MCP服务器实例
 logger.debug("正在创建MCP服务器实例...")
-mcp = FastMCP("MySQL Query Server", "cccccccccc", host=host, port=port, debug=True, sse_path='/sse2')
+mcp = FastMCP(
+    "MySQL Query Server",
+    "cccccccccc",
+    host=host,
+    port=port,
+    debug=True,
+    mount_path=mount_path,
+    sse_path=sse_path,
+)
 logger.debug("MCP服务器实例创建完成")
 
 def auto_register_tools(mcp):
@@ -172,7 +202,10 @@ def start_server():
     logger.debug("开始启动MySQL查询服务器...")
 
     print(f"开始启动MySQL查询SSE服务器...")
-    print(f"服务器监听在 {host}:{port}/sse2")
+    full_path = f"{mount_path.rstrip('/')}{sse_path}"
+    if not full_path:
+        full_path = '/'  # 理论不会出现，因为 sse_path 不允许 '/'
+    print(f"服务器监听在 {host}:{port}{full_path}")
     
     try:
         # 检查MySQL配置是否有效并初始化连接池
@@ -182,8 +215,8 @@ def start_server():
             _server_data['loop'].run_until_complete(init_database())
         
         # 使用run_app函数启动服务器
-        logger.debug("调用mcp.run('sse')启动服务器...")
-        mcp.run('sse')
+        logger.debug("调用 mcp.run('sse', mount_path=%s) 启动服务器...", mount_path)
+        mcp.run('sse', mount_path=mount_path)
     except Exception as e:
         logger.exception(f"服务器运行时发生错误: {str(e)}")
         print(f"服务器运行时发生错误: {str(e)}")

@@ -20,6 +20,10 @@ class ServerConfig:
     """服务器配置"""
     HOST = os.getenv('HOST', '127.0.0.1')
     PORT = int(os.getenv('PORT', '3000'))
+    # MCP 服务器对外暴露的基础挂载路径，默认 '/'
+    MOUNT_PATH = os.getenv('MOUNT_PATH', '/')
+    # SSE 推送端点路径，默认 '/sse2'，可通过环境变量按需调整
+    SSE_PATH = os.getenv('SSE_PATH', '/sse2')
     
 # 数据库配置
 class DatabaseConfig:

@@ -40,39 +40,61 @@
 
 ## ✅ 修复方案
 
-### 修改 1：更正 FastMCP 初始化参数
+### 修改 1：配置层新增可自定义路由
 
-**位置：**`src/server.py` 第 52 行
+**位置：**`src/config.py`
 
-**修改前：**
 ```python
-mcp = FastMCP("MySQL Query Server", "cccccccccc", host=host, port=port, debug=True, endpoint='/sse2')
+class ServerConfig:
+    HOST = os.getenv('HOST', '127.0.0.1')
+    PORT = int(os.getenv('PORT', '3000'))
+    MOUNT_PATH = os.getenv('MOUNT_PATH', '/')
+    SSE_PATH = os.getenv('SSE_PATH', '/sse2')
 ```
 
-**修改后：**
-```python
-mcp = FastMCP("MySQL Query Server", "cccccccccc", host=host, port=port, debug=True, sse_path='/sse2')
-```
-
-**说明：**将 `endpoint` 改为 `sse_path`，这是 FastMCP 框架正确的参数名。
+> 通过环境变量集中管理挂载路径与 SSE 端点，默认仍为 `/sse2`，但无需改动代码即可切换。
 
 ---
 
-### 修改 2：更正 run 方法的 transport 参数
+### 修改 2：服务器启动时统一归一化并写入 FastMCP
 
-**位置：**`src/server.py` 第 186 行
+**位置：**`src/server.py`
 
-**修改前：**
 ```python
-mcp.run('sse2')
+def _normalize_path(path: str, *, allow_root: bool = False) -> str:
+    # 确保前导斜杠、去掉多余尾斜杠，禁止 SSE_PATH 为根路径
+    ...
+
+mount_path = _normalize_path(ServerConfig.MOUNT_PATH, allow_root=True)
+sse_path = _normalize_path(ServerConfig.SSE_PATH)
+
+mcp = FastMCP(
+    "MySQL Query Server",
+    "cccccccccc",
+    host=host,
+    port=port,
+    debug=True,
+    mount_path=mount_path,
+    sse_path=sse_path,
+)
+
+mcp.run('sse', mount_path=mount_path)
 ```
 
-**修改后：**
+> 这样既保留了 `transport='sse'` 协议，又确保运行时不会退回默认 `/sse`。
+
+---
+
+### 修改 3：调试脚本共用同一配置
+
+**位置：**`start_server_debug.py`、`test_actual_server.py`、`diagnose_and_fix.sh`
+
 ```python
-mcp.run('sse')
+mount_path = _normalize_path(ServerConfig.MOUNT_PATH, allow_root=True)
+sse_path = _normalize_path(ServerConfig.SSE_PATH)
 ```
 
-**说明：**transport 参数必须是 `'sse'` 而不是 `'sse2'`，这是传输协议类型，不是路径。
+> 所有辅助脚本都会打印当前挂载与 SSE 路径，方便排查环境变量与实际输出是否一致。
 
 ---
 
@@ -82,11 +104,11 @@ mcp.run('sse')
 ```bash
 $ python -m src.server
 开始启动MySQL查询SSE服务器...
-服务器监听在 127.0.0.1:3000/sse2
+服务器监听在 127.0.0.1:3000/sse2  # 默认输出，若修改 .env 会显示新路径
 ```
 
 ### 访问地址：
-- ✅ **正确访问地址：** `http://127.0.0.1:3000/sse2`
+- ✅ **正确访问地址：** `http://HOST:PORT{MOUNT_PATH.rstrip('/')}{SSE_PATH}`（默认 `http://127.0.0.1:3000/sse2`）
 - ❌ **旧地址失效：** `http://127.0.0.1:3000/sse`
 
 ---
@@ -99,6 +121,7 @@ $ python -m src.server
    - 代码作者可能以为参数名是 `endpoint`
    - 但 FastMCP 实际使用的是 `sse_path`
    - 当传入不存在的参数时，FastMCP 会忽略它并使用默认值 `'/sse'`
+   - 现在通过 `ServerConfig.SSE_PATH` 统一管理，可避免再次填错参数名
 
 2. **Transport 类型混淆：**
    - `mcp.run()` 的第一个参数是**传输协议类型**，不是路径
@@ -109,13 +132,12 @@ $ python -m src.server
 
 ```
 1. 创建 FastMCP 实例
-   └─> 设置 sse_path='/sse2' (定义 SSE 路径)
-       设置 host='127.0.0.1' (定义监听地址)
-       设置 port=3000 (定义监听端口)
+   └─> 读取并规范化 mount_path='/' 与 sse_path='/sse2'
+       设置 host='127.0.0.1'，port=3000
 
-2. 调用 mcp.run('sse')
+2. 调用 mcp.run('sse', mount_path=mount_path)
    └─> 使用 'sse' 传输协议
-       在地址 http://127.0.0.1:3000/sse2 启动服务
+       在地址 http://127.0.0.1:3000/sse2（或 .env 中自定义路径）启动服务
 ```
 
 ### 类比理解（用开餐厅的例子）
@@ -136,54 +158,15 @@ mcp.run() = 开门营业
 
 ## 🔧 如何自定义 SSE 路径
 
-如果你想修改为其他路径，比如 `/api/mysql`：
+假设你希望把接口改到 `/api/mysql`：
 
-### 方法 1：直接修改代码
-
-```python
-# src/server.py 第 52 行
-mcp = FastMCP("MySQL Query Server", "cccccccccc", 
-              host=host, port=port, debug=True, 
-              sse_path='/api/mysql')  # 修改这里
-
-# 第 186 行保持不变
-mcp.run('sse')  # transport 保持为 'sse'
-```
-
-访问地址将变为：`http://127.0.0.1:3000/api/mysql`
-
-### 方法 2：通过环境变量配置（推荐）
-
-**步骤 1：** 修改 `src/config.py`，添加配置项：
-
-```python
-class ServerConfig:
-    HOST = os.getenv('HOST', '127.0.0.1')
-    PORT = int(os.getenv('PORT', '3000'))
-    SSE_PATH = os.getenv('SSE_PATH', '/sse2')  # 新增
-```
-
-**步骤 2：** 修改 `src/server.py`，使用配置：
-
-```python
-from src.config import ServerConfig
-
-host = ServerConfig.HOST
-port = ServerConfig.PORT
-sse_path = ServerConfig.SSE_PATH  # 新增
-
-mcp = FastMCP("MySQL Query Server", "cccccccccc", 
-              host=host, port=port, debug=True, 
-              sse_path=sse_path)  # 使用变量
-```
-
-**步骤 3：** 在 `.env` 文件中配置：
-
-```env
-SSE_PATH=/api/mysql
-```
-
-这样就可以不修改代码，只通过环境变量来控制 SSE 路径了！
+1. 在 `.env` 文件中写入：
+   ```ini
+   MOUNT_PATH=/api
+   SSE_PATH=/mysql
+   ```
+2. 重启服务器，终端会打印新的完整地址（例如 `http://127.0.0.1:3000/api/mysql`）。
+3. 调试脚本 `start_server_debug.py`、`diagnose_and_fix.sh` 会自动显示相同的 URL，方便核对是否配置成功。
 
 ---
 
@@ -191,20 +174,14 @@ SSE_PATH=/api/mysql
 
 ```mermaid
 graph TD
-    A[发现问题: /sse2 无法访问] --> B[检查代码]
-    B --> C{找到错误}
-    C --> D[错误1: endpoint 参数不存在]
-    C --> E[错误2: transport='sse2' 无效]
-    
-    D --> F[修复: 改为 sse_path='/sse2']
-    E --> G[修复: 改为 mcp.run'sse']
-    
-    F --> H[重启服务器]
-    G --> H
-    
-    H --> I[测试访问 /sse2]
-    I --> J{访问成功?}
-    J -->|是| K[✅ 修复完成]
+    A[发现问题: /sse2 无法访问] --> B[新增 MOUNT_PATH/SSE_PATH 配置]
+    B --> C[统一规范化路径]
+    C --> D[FastMCP 注入 mount_path 与 sse_path]
+    D --> E[mcp.run('sse', mount_path=mount_path)]
+    E --> F[调试脚本输出完整 URL]
+    F --> G[curl 测试新路径]
+    G --> H{访问成功?}
+    H -->|是| I[✅ 修复完成]
     J -->|否| L[检查防火墙/端口]
     
     style A fill:#ffcdd2
@@ -227,7 +204,7 @@ python -m src.server
 ```
 
 ### 2. 查看启动日志
-应该看到：
+应该看到（若未修改 `.env`）：
 ```
 开始启动MySQL查询SSE服务器...
 服务器监听在 127.0.0.1:3000/sse2
@@ -236,7 +213,7 @@ python -m src.server
 ### 3. 测试连接
 使用浏览器或 curl 测试：
 ```bash
-curl http://127.0.0.1:3000/sse2
+curl http://127.0.0.1:3000/sse2  # 如已修改 .env，请替换为新的完整路径
 ```
 
 或在浏览器访问：`http://127.0.0.1:3000/sse2`

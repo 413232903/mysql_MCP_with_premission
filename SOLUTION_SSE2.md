@@ -6,17 +6,26 @@
 
 ## ✅ 解决步骤
 
-### 步骤1：确认代码已修改
+### 步骤1：确认配置与代码同步
 
-检查 `src/server.py` 文件第 52 行和第 186 行：
+1. `src/config.py` 中应包含新的环境变量：
+   ```python
+   class ServerConfig:
+       HOST = os.getenv('HOST', '127.0.0.1')
+       PORT = int(os.getenv('PORT', '3000'))
+       MOUNT_PATH = os.getenv('MOUNT_PATH', '/')
+       SSE_PATH = os.getenv('SSE_PATH', '/sse2')
+   ```
+2. `src/server.py` 需要读取并规范化路径：
+   ```python
+   mount_path = _normalize_path(ServerConfig.MOUNT_PATH, allow_root=True)
+   sse_path = _normalize_path(ServerConfig.SSE_PATH)
 
-```python
-# 第 52 行 - 应该使用 sse_path 参数
-mcp = FastMCP("MySQL Query Server", "cccccccccc", host=host, port=port, debug=True, sse_path='/sse2')
-
-# 第 186 行 - 应该使用 'sse' 作为传输协议
-mcp.run('sse')
-```
+   mcp = FastMCP(..., mount_path=mount_path, sse_path=sse_path)
+   ...
+   mcp.run('sse', mount_path=mount_path)
+   ```
+3. 辅助脚本（`start_server_debug.py`、`test_actual_server.py`、`diagnose_and_fix.sh`）也会调用相同的 `_normalize_path` 逻辑，启动后会打印实际监听地址。
 
 ### 步骤2：清除 Python 缓存
 
@@ -71,14 +80,14 @@ python -m src.server
 启动服务器后，检查输出日志中是否包含：
 
 ```
-Settings.sse_path: /sse2
-预期访问地址: http://127.0.0.1:3000/sse2
+Settings.sse_path: /sse2             # 若修改 .env 会显示新值
+预期访问地址: http://127.0.0.1:3000/sse2  # 会根据 MOUNT_PATH/SSE_PATH 自动拼接
 ```
 
 然后测试访问：
 
 ```bash
-# 这个应该工作 ✅
+# 这个应该工作 ✅（如已自定义，请替换路径）
 curl http://127.0.0.1:3000/sse2
 
 # 这个应该失败 ❌
@@ -102,10 +111,10 @@ pkill -9 python
 # 2. 再次清除缓存
 rm -rf src/__pycache__ src/*/__pycache__
 
-# 3. 确认代码修改
-cat src/server.py | grep "sse_path"
+# 3. 检查当前环境变量
+grep SSE_PATH .env 2>/dev/null || echo "SSE_PATH 未在 .env 中显式设置（将使用默认 /sse2）"
 
-# 4. 重新启动
+# 4. 重新启动并观察输出
 python start_server_debug.py
 ```
 
@@ -133,8 +142,8 @@ cat src/server.py | grep -n "FastMCP.*host"
 
 ```python
 # ✅ 正确
-mcp = FastMCP(..., sse_path='/sse2')  # 初始化时设置路径
-mcp.run('sse')                        # 运行时指定传输协议
+mcp = FastMCP(..., mount_path='/', sse_path='/sse2')  # 初始化时设置挂载与路径
+mcp.run('sse', mount_path='/')                        # 运行时指定传输协议并保持同一路径
 
 # ❌ 错误
 mcp = FastMCP(..., endpoint='/sse2')  # endpoint 参数不存在
@@ -182,34 +191,38 @@ echo ""
 echo "=== 测试 FastMCP 配置 ==="
 python -c "
 from mcp.server.fastmcp import FastMCP
-mcp = FastMCP('Test', host='127.0.0.1', port=3000, sse_path='/sse2')
+from dotenv import load_dotenv
+load_dotenv()
+from src.config import ServerConfig
+
+def _normalize_path(path: str, allow_root: bool = False, fallback: str = '/sse'):
+    if not path:
+        return '/' if allow_root else fallback
+    path = path.strip()
+    if not path.startswith('/'):
+        path = '/' + path
+    if len(path) > 1:
+        path = path.rstrip('/')
+    if not allow_root and path == '/':
+        raise ValueError("SSE 路径不能为根路径 '/', 请设置子路径")
+    return path
+
+mount_path = _normalize_path(ServerConfig.MOUNT_PATH, allow_root=True)
+sse_path = _normalize_path(ServerConfig.SSE_PATH)
+
+mcp = FastMCP('Test', host=ServerConfig.HOST, port=ServerConfig.PORT, mount_path=mount_path, sse_path=sse_path)
 print(f'mount_path: {mcp.settings.mount_path}')
 print(f'sse_path: {mcp.settings.sse_path}')
-print(f'完整URL: http://127.0.0.1:3000{mcp.settings.sse_path}')
+print(f'完整URL: http://{ServerConfig.HOST}:{ServerConfig.PORT}{mount_path.rstrip('/')}{sse_path}')
 "
 ```
 
 ## 💡 提示
 
-如果你想临时测试不同的路径而不修改代码，可以使用环境变量（需要先修改 config.py）：
-
-```bash
-# 在 .env 文件中添加
-SSE_PATH=/custom/path
-
-# 然后在 src/config.py 中添加
-class ServerConfig:
-    HOST = os.getenv('HOST', '127.0.0.1')
-    PORT = int(os.getenv('PORT', '3000'))
-    SSE_PATH = os.getenv('SSE_PATH', '/sse2')  # 新增
-
-# 在 src/server.py 中使用
-sse_path = ServerConfig.SSE_PATH
-mcp = FastMCP(..., sse_path=sse_path)
-```
+现在已经内置环境变量配置：直接在 `.env` 中调整 `MOUNT_PATH` 与 `SSE_PATH`，重启服务即可生效，无需再修改代码。
 
 ---
 
 **创建日期**: 2025-10-30  
-**最后更新**: 2025-10-30
+**最后更新**: 2025-11-05
 

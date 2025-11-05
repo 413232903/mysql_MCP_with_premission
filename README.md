@@ -90,8 +90,8 @@ Copy `.env.example` to `.env` and modify as needed.
 ```bash
 python -m src.server
 ```
-默认监听：http://127.0.0.1:3000/sse2
-Default endpoint: http://127.0.0.1:3000/sse2
+默认监听地址：`http://{HOST}:{PORT}{MOUNT_PATH.rstrip('/')}{SSE_PATH}`（默认 `http://127.0.0.1:3000/sse2`）
+Default endpoint: `http://{HOST}:{PORT}{MOUNT_PATH.rstrip('/')}{SSE_PATH}` (defaults to `http://127.0.0.1:3000/sse2`)
 
 ---
 
@@ -128,6 +128,8 @@ Default endpoint: http://127.0.0.1:3000/sse2
 |--------------------------|------------------------------------------------------|------------------|
 | HOST                     | 服务器监听地址 / Server listen address                | 127.0.0.1        |
 | PORT                     | 服务器监听端口 / Server listen port                   | 3000             |
+| MOUNT_PATH               | MCP基础挂载路径 / MCP base mount path                 | /                |
+| SSE_PATH                 | SSE推送端点路径 / SSE endpoint path                   | /sse2            |
 | MYSQL_HOST               | MySQL服务器地址 / MySQL server host                   | localhost        |
 | MYSQL_PORT               | MySQL服务器端口 / MySQL server port                   | 3306             |
 | MYSQL_USER               | MySQL用户名 / MySQL username                          | root             |
@@ -153,6 +155,13 @@ Default endpoint: http://127.0.0.1:3000/sse2
 | LOG_LEVEL                | 日志级别(DEBUG/INFO/...) / Log level                 | DEBUG            |
 
 > 注/Note: 部分云MySQL需指定`DB_AUTH_PLUGIN`为`mysql_native_password`。
+
+### SSE 路由配置说明 / SSE Route Configuration
+
+1. 在 `.env` 中设置 `SSE_PATH`（如 `/sse3`）即可切换推送端点，必要时搭配 `MOUNT_PATH`（如 `/api`）组合完整访问路径。
+2. 服务端会自动拼接 `http://HOST:PORT{MOUNT_PATH.rstrip('/')}{SSE_PATH}`，因此 `MOUNT_PATH=/api` 且 `SSE_PATH=/sse3` 时，最终地址为 `http://HOST:PORT/api/sse3`。
+3. 所有启动脚本（`src/server.py`、`start_server_debug.py`、`test_actual_server.py`、`diagnose_and_fix.sh`）均通过 `ServerConfig` 读取同一配置，避免硬编码导致路由不一致。
+4. 如需了解更多 FastMCP 运行方式与传输协议选择，可参考官方部署文档，掌握 `sse_path` 与 `run(transport='sse')` 的配置细节 [[FastMCP 路由配置指南](https://www.aidoczh.com/fastmcp/deployment/running-server.html)].
 
 ### MySQL 8.0 认证支持 / MySQL 8.0 Authentication Support
 
@@ -342,3 +351,12 @@ MIT License
 
 本软件按"原样"提供，不提供任何形式的明示或暗示的保证，包括但不限于对适销性、特定用途的适用性和非侵权性的保证。在任何情况下，作者或版权持有人均不对任何索赔、损害或其他责任负责，无论是在合同诉讼、侵权行为还是其他方面，产生于、源于或与本软件有关，或与本软件的使用或其他交易有关。  
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+## 12. 路由修改总结与反思 / Route Update Summary & Reflection
+
+- **修改内容**：引入 `MOUNT_PATH`、`SSE_PATH` 环境变量，并让核心服务与辅助脚本统一读取配置，自动拼接最终访问路径，消除 `/sse` 与 `/sse2` 混用隐患。
+- **验证要点**：启动日志、调试脚本与诊断脚本均输出同一 URL，使用 `curl http://HOST:PORT{MOUNT_PATH.rstrip('/')}{SSE_PATH}` 快速验证；若需更换后缀仅修改 `.env` 即可。
+- **经验总结**：遵循 FastMCP 官方建议将路由定义在初始化参数中，同时保持 `mcp.run('sse')` 的传输协议不变，可避免回退到默认 `/sse`；集中化配置能减少多处修改带来的失误。
+- **后续建议**：结合部署环境准备一键化脚本导出访问地址，并补充自动化测试覆盖不同 `SSE_PATH`/`MOUNT_PATH` 组合，进一步防止配置漂移。

@@ -23,8 +23,29 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from src.config import ServerConfig
+
+
+def _normalize_path(path: str, *, allow_root: bool = False, fallback: str = '/sse') -> str:
+    """与服务器逻辑保持一致的路径格式化"""
+    if not path:
+        return '/' if allow_root else fallback
+    path = path.strip()
+    if not path.startswith('/'):
+        path = '/' + path
+    if len(path) > 1:
+        path = path.rstrip('/')
+    if not allow_root and path == '/':
+        raise ValueError("SSE 路径不能为根路径 '/'，请在 .env 中设置为例如 '/sse2'")
+    return path
+
+
+mount_path = _normalize_path(ServerConfig.MOUNT_PATH, allow_root=True)
+sse_path = _normalize_path(ServerConfig.SSE_PATH)
+
 print(f"  HOST: {ServerConfig.HOST}")
 print(f"  PORT: {ServerConfig.PORT}")
+print(f"  MOUNT_PATH: {mount_path}")
+print(f"  SSE_PATH: {sse_path}")
 
 # 导入 FastMCP
 print("\n【步骤2】导入 FastMCP...")
@@ -34,12 +55,13 @@ print(f"  FastMCP 版本: {FastMCP.__module__}")
 # 创建实例
 print("\n【步骤3】创建 FastMCP 实例...")
 mcp = FastMCP(
-    "MySQL Query Server", 
+    "MySQL Query Server",
     "debug_version",
-    host=ServerConfig.HOST, 
-    port=ServerConfig.PORT, 
-    debug=True, 
-    sse_path='/sse2'  # 设置为 /sse2
+    host=ServerConfig.HOST,
+    port=ServerConfig.PORT,
+    debug=True,
+    mount_path=mount_path,
+    sse_path=sse_path,
 )
 
 print(f"  ✅ FastMCP 实例已创建")
@@ -60,10 +82,13 @@ print("\n" + "="*80)
 print("【服务器信息】")
 print("="*80)
 print(f"服务器地址: http://{ServerConfig.HOST}:{ServerConfig.PORT}")
-print(f"SSE 路径配置: {mcp.settings.sse_path}")
 print(f"挂载路径配置: {mcp.settings.mount_path}")
+print(f"SSE 路径配置: {mcp.settings.sse_path}")
 print(f"\n预期访问地址:")
-print(f"  ✅ http://{ServerConfig.HOST}:{ServerConfig.PORT}{mcp.settings.sse_path}")
+full_path = f"{mcp.settings.mount_path.rstrip('/')}{mcp.settings.sse_path}"
+if not full_path:
+    full_path = '/'
+print(f"  ✅ http://{ServerConfig.HOST}:{ServerConfig.PORT}{full_path}")
 print(f"  ❌ http://{ServerConfig.HOST}:{ServerConfig.PORT}/sse (旧路径，不应该工作)")
 print("\n" + "="*80)
 print("按 Ctrl+C 停止服务器")
@@ -72,7 +97,7 @@ print("="*80 + "\n")
 # 启动服务器
 try:
     print("【步骤5】启动服务器...")
-    mcp.run('sse')  # 使用 SSE 传输协议
+    mcp.run('sse', mount_path=mount_path)  # 使用 SSE 传输协议
 except KeyboardInterrupt:
     print("\n\n服务器已停止")
 except Exception as e:
