@@ -8,6 +8,7 @@ import importlib
 import pkgutil
 import inspect
 import threading
+from pathlib import Path
 
 # 加载环境变量 - 移到最前面确保所有模块导入前环境变量已加载
 load_dotenv()
@@ -20,10 +21,31 @@ from src.tools.mysql_info_tool import register_info_tools
 from src.tools.mysql_schema_tool import register_schema_tools
 
 # 配置日志
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+def _setup_logging() -> None:
+    """将日志同时输出到控制台和项目根目录文件"""
+    log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    root_logger = logging.getLogger()
+
+    if root_logger.handlers:
+        return
+
+    root_logger.setLevel(logging.DEBUG)
+
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter(log_format))
+    root_logger.addHandler(console_handler)
+
+    try:
+        project_root = Path(__file__).resolve().parent.parent
+        log_file = project_root / 'mysql_server.log'
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setFormatter(logging.Formatter(log_format))
+        root_logger.addHandler(file_handler)
+    except Exception as exc:  # pragma: no cover - 仅在文件句柄异常时触发
+        print(f"警告: 无法创建日志文件: {exc}")
+
+
+_setup_logging()
 logger = logging.getLogger("mysql_server")
 
 # 记录环境变量加载情况
