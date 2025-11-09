@@ -5,7 +5,9 @@
 import logging
 import re
 import sqlparse
-from typing import Optional, Tuple
+from typing import Optional, Set
+from sqlparse.sql import Identifier, IdentifierList, Parenthesis, TokenList
+from sqlparse.tokens import Keyword, DML, Whitespace, Punctuation
 from ..config import RolePermissionConfig
 
 logger = logging.getLogger(__name__)
@@ -23,6 +25,9 @@ class RolePermissionManager:
         self.extend_field = RolePermissionConfig.USER_ROLE_EXTEND_FIELD
         self.role_prefix = RolePermissionConfig.USER_ROLE_PREFIX
         self.super_admins = RolePermissionConfig.SUPER_ADMIN_USERS
+        self._normalized_permission_tables = {
+            table.lower() for table in self.permission_tables
+        }
 
         if self.enabled:
             logger.info(f"角色权限控制已启用: 权限表={list(self.permission_tables)}, 权限字段={self.permission_field}")
@@ -52,18 +57,36 @@ class RolePermissionManager:
             logger.debug(f"用户 {user_id} 是超级管理员，跳过权限控制")
             return False
 
-        # 只处理 SELECT 查询
-        normalized_sql = sql_query.strip().upper()
-        if not normalized_sql.startswith('SELECT'):
+        statement = self._parse_first_statement(sql_query)
+        if statement is None:
+            logger.debug("SQL 解析失败，跳过权限控制")
+            return False
+
+        if not self._is_select_statement(statement):
             logger.debug("非 SELECT 查询，跳过权限控制")
             return False
 
         # 检查查询是否涉及需要权限控制的表
-        if not self._contains_permission_tables(sql_query):
+        if not self._statement_contains_permission_tables(statement):
             logger.debug("查询不涉及权限控制表，跳过权限控制")
             return False
 
         return True
+
+    def _parse_first_statement(self, sql_query: str) -> Optional[TokenList]:
+        """
+        解析 SQL 并返回首个 Statement
+
+        Args:
+            sql_query: SQL 查询语句
+
+        Returns:
+            首个解析后的 Statement 对象
+        """
+        parsed = sqlparse.parse(sql_query)
+        if not parsed:
+            return None
+        return parsed[0]
 
     def _contains_permission_tables(self, sql_query: str) -> bool:
         """
@@ -75,30 +98,10 @@ class RolePermissionManager:
         Returns:
             是否包含权限控制表
         """
-        if not self.permission_tables:
+        statement = self._parse_first_statement(sql_query)
+        if statement is None:
             return False
-
-        # 解析 SQL 获取表名
-        parsed = sqlparse.parse(sql_query)
-        if not parsed:
-            return False
-
-        sql_str = str(parsed[0]).upper()
-
-        for table in self.permission_tables:
-            # 匹配表名（考虑别名、database.table 等情况）
-            patterns = [
-                rf'\bFROM\s+`?{re.escape(table.upper())}`?\b',
-                rf'\bJOIN\s+`?{re.escape(table.upper())}`?\b',
-                rf'\b`?{re.escape(table.upper())}`?\s+AS\b',
-                rf'\b`?{re.escape(table.upper())}`?\s+\w+\b',
-            ]
-            for pattern in patterns:
-                if re.search(pattern, sql_str, re.IGNORECASE):
-                    logger.debug(f"SQL 涉及权限控制表: {table}")
-                    return True
-
-        return False
+        return self._statement_contains_permission_tables(statement)
 
     def inject_permission_filter(self, sql_query: str, user_id: Optional[str]) -> str:
         """
@@ -133,6 +136,144 @@ class RolePermissionManager:
         logger.debug(f"修改后 SQL: {modified_sql}")
 
         return modified_sql
+
+    def _is_select_statement(self, statement: TokenList) -> bool:
+        """
+        判断语句是否为 SELECT
+        """
+        if statement is None:
+            return False
+
+        stmt_type = statement.get_type()
+        if stmt_type and stmt_type.upper() == 'SELECT':
+            return True
+
+        first_token = statement.token_first(skip_cm=True, skip_ws=True)
+        if not first_token:
+            return False
+
+        if first_token.ttype is DML:
+            return first_token.value.upper() == 'SELECT'
+
+        if first_token.ttype is Keyword and first_token.value.upper() == 'WITH':
+            dml_token = self._find_first_dml_token(statement)
+            return dml_token is not None and dml_token.value.upper() == 'SELECT'
+
+        return False
+
+    def _find_first_dml_token(self, token_list: TokenList):
+        """
+        在语句中查找首个 DML Token
+        """
+        if isinstance(token_list, TokenList):
+            for token in token_list.tokens:
+                if token.ttype is DML:
+                    return token
+                if token.is_group:
+                    nested = self._find_first_dml_token(token)
+                    if nested:
+                        return nested
+        return None
+
+    def _statement_contains_permission_tables(self, statement: TokenList) -> bool:
+        """
+        检查 Statement 是否包含需要权限控制的表
+        """
+        if not self._normalized_permission_tables:
+            return False
+
+        table_names = self._extract_table_names(statement)
+        if table_names:
+            logger.debug(f"解析到的表名: {table_names}")
+
+        return any(table in self._normalized_permission_tables for table in table_names)
+
+    def _extract_table_names(self, token_list: TokenList) -> Set[str]:
+        """
+        从 TokenList 中提取表名集合
+        """
+        tables: Set[str] = set()
+        from_context = False
+
+        if not isinstance(token_list, TokenList):
+            return tables
+
+        for token in token_list.tokens:
+            if token.is_group:
+                tables.update(self._extract_table_names(token))
+
+            if token.ttype is Keyword:
+                keyword_value = token.value.upper()
+                if keyword_value in {'FROM', 'JOIN'}:
+                    from_context = True
+                    continue
+                if from_context and keyword_value in {
+                    'ON', 'USING', 'WHERE', 'GROUP', 'ORDER', 'HAVING',
+                    'LIMIT', 'UNION', 'EXCEPT', 'INTERSECT'
+                }:
+                    from_context = False
+                    continue
+
+            if not from_context:
+                continue
+
+            if isinstance(token, IdentifierList):
+                for identifier in token.get_identifiers():
+                    name = self._clean_identifier(identifier)
+                    if name:
+                        tables.add(name)
+                continue
+
+            if isinstance(token, Identifier):
+                name = self._clean_identifier(token)
+                if name:
+                    tables.add(name)
+                continue
+
+            if isinstance(token, Parenthesis):
+                # 子查询在递归时已经处理，这里跳过
+                continue
+
+            if token.ttype in (Whitespace, Punctuation):
+                continue
+
+            raw_name = self._clean_raw_token(token)
+            if raw_name:
+                tables.add(raw_name)
+
+        return tables
+
+    def _clean_identifier(self, identifier: Identifier) -> Optional[str]:
+        """
+        获取 Identifier 对应的真实表名
+        """
+        real_name = identifier.get_real_name()
+        if real_name:
+            return real_name.strip('`"').lower()
+
+        name = identifier.get_name()
+        if name:
+            return name.strip('`"').lower()
+
+        return self._clean_raw_token(identifier)
+
+    def _clean_raw_token(self, token) -> Optional[str]:
+        """
+        从普通 Token 中提取表名
+        """
+        value = str(token).strip()
+        if not value:
+            return None
+
+        first_part = value.split()[0]
+        first_part = first_part.strip('`"')
+        if '.' in first_part:
+            first_part = first_part.split('.')[-1]
+
+        if not first_part or first_part.upper() in {'(', ')'}:
+            return None
+
+        return first_part.lower()
 
     def _build_permission_condition(self, user_id: str) -> str:
         """

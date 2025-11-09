@@ -360,3 +360,14 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - **验证要点**：启动日志、调试脚本与诊断脚本均输出同一 URL，使用 `curl http://HOST:PORT{MOUNT_PATH.rstrip('/')}{SSE_PATH}` 快速验证；若需更换后缀仅修改 `.env` 即可。
 - **经验总结**：遵循 FastMCP 官方建议将路由定义在初始化参数中，同时保持 `mcp.run('sse')` 的传输协议不变，可避免回退到默认 `/sse`；集中化配置能减少多处修改带来的失误。
 - **后续建议**：结合部署环境准备一键化脚本导出访问地址，并补充自动化测试覆盖不同 `SSE_PATH`/`MOUNT_PATH` 组合，进一步防止配置漂移。
+
+---
+
+## 13. 角色权限控制修复总结 / Role Permission Enforcement Summary
+
+- **问题回顾**：生产环境中带库名前缀、CTE 或包含头部注释的查询未触发 `RolePermissionManager` 的过滤，导致行级权限未生效。
+- **修复内容**：基于 `sqlparse` 精确解析 `SELECT` 语句与 `FROM/JOIN` 表名，支持 `database.table`、多表 JOIN、CTE 与注释场景，同时保留超级管理员豁免机制。
+- **验证方式**：
+  - 新增单元测试 `tests/test_role_permission.py`，覆盖前述复杂语句，运行 `python -m unittest tests.test_role_permission` 可快速回归。
+  - 观察运行日志中“解析到的表名”调试信息，确认权限过滤命中目标表后才会注入条件。
+- **排障建议**：若过滤未生效，优先检查环境变量 `ENABLE_ROLE_PERMISSION`、`PERMISSION_TABLES` 是否配置正确，并使用上述单元测试样例构造 SQL 在非生产环境复现问题。
