@@ -152,6 +152,14 @@ Default endpoint: `http://{HOST}:{PORT}{MOUNT_PATH.rstrip('/')}{SSE_PATH}` (defa
 | ENABLE_QUERY_CHECK       | 启用查询安全检查 / Enable query check (true/false)    | true             |
 | **ENABLE_DATABASE_ISOLATION** | **启用数据库隔离 / Enable database isolation (true/false)** | **false** |
 | **DATABASE_ACCESS_LEVEL** | **数据库访问级别 / Database access level (strict/restricted/permissive)** | **permissive** |
+| **ENABLE_ROLE_PERMISSION** | **启用角色权限控制（行级权限）/ Enable role permission (true/false)** | **false** |
+| **PERMISSION_TABLES** | **需要权限过滤的表（逗号分隔）/ Permission tables (comma-separated)** | **(空/empty)** |
+| **PERMISSION_FIELD** | **权限字段名称 / Permission field name** | **gssq** |
+| **USER_ROLE_TABLE** | **用户角色表名 / User role table name** | **fr_user_role** |
+| **USER_ROLE_USERNAME_FIELD** | **用户角色表中的用户名字段 / Username field in user role table** | **username** |
+| **USER_ROLE_EXTEND_FIELD** | **用户角色表中存储权限的字段 / Permission field in user role table** | **extend1** |
+| **USER_ROLE_PREFIX** | **权限标识前缀 / Permission prefix** | **RX** |
+| **SUPER_ADMIN_USERS** | **超级管理员列表（逗号分隔）/ Super admin users (comma-separated)** | **(空/empty)** |
 | LOG_LEVEL                | 日志级别(DEBUG/INFO/...) / Log level                 | DEBUG            |
 
 > 注/Note: 部分云MySQL需指定`DB_AUTH_PLUGIN`为`mysql_native_password`。
@@ -336,6 +344,28 @@ A: limit必须为非负整数。
 Q: limit parameter error?
 A: limit must be a non-negative integer.
 
+### Q: 行级权限没有生效？
+A: 请按以下步骤排查：
+1. 检查是否启用了权限控制：在 `.env` 中设置 `ENABLE_ROLE_PERMISSION=true`
+2. 检查是否配置了权限表：设置 `PERMISSION_TABLES=表名1,表名2,...`
+3. 检查调用时是否传入了 `user_id` 参数：`mysql_query(query='...', user_id='用户名')`
+4. 检查 `user_id` 是否在 `SUPER_ADMIN_USERS` 中（超级管理员会跳过权限检查）
+5. 检查查询的表名是否在 `PERMISSION_TABLES` 配置中
+6. 检查 SQL 是否为 SELECT 查询（其他操作类型不应用权限过滤）
+7. 运行诊断脚本：`python diagnose_permission.py` 查看详细配置信息
+8. 查看服务器日志中的权限相关调试信息
+
+Q: Row-level permission not working?
+A: Please check:
+1. Enable permission control: Set `ENABLE_ROLE_PERMISSION=true` in `.env`
+2. Configure permission tables: Set `PERMISSION_TABLES=table1,table2,...`
+3. Pass `user_id` parameter when calling: `mysql_query(query='...', user_id='username')`
+4. Check if `user_id` is in `SUPER_ADMIN_USERS` (super admins skip permission check)
+5. Check if query table is in `PERMISSION_TABLES`
+6. Check if SQL is a SELECT query (other operations don't apply permission filter)
+7. Run diagnostic script: `python diagnose_permission.py`
+8. Check server logs for permission-related debug info
+
 ---
 
 ## 10. 贡献指南 / Contribution Guide
@@ -369,5 +399,96 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 - **修复内容**：基于 `sqlparse` 精确解析 `SELECT` 语句与 `FROM/JOIN` 表名，支持 `database.table`、多表 JOIN、CTE 与注释场景，同时保留超级管理员豁免机制。
 - **验证方式**：
   - 新增单元测试 `tests/test_role_permission.py`，覆盖前述复杂语句，运行 `python -m unittest tests.test_role_permission` 可快速回归。
-  - 观察运行日志中“解析到的表名”调试信息，确认权限过滤命中目标表后才会注入条件。
+  - 观察运行日志中"解析到的表名"调试信息，确认权限过滤命中目标表后才会注入条件。
 - **排障建议**：若过滤未生效，优先检查环境变量 `ENABLE_ROLE_PERMISSION`、`PERMISSION_TABLES` 是否配置正确，并使用上述单元测试样例构造 SQL 在非生产环境复现问题。
+
+---
+
+## 14. 行级权限配置指南 / Row-Level Permission Configuration Guide
+
+### 功能说明 / Function Description
+
+行级权限控制基于数据库表中的权限字段（默认 `gssq`）实现数据访问控制。启用后，系统会自动向 SELECT 查询注入权限过滤条件，确保用户只能查询到其有权限访问的数据。
+
+Row-level permission control is based on permission fields (default `gssq`) in database tables. When enabled, the system automatically injects permission filter conditions into SELECT queries to ensure users can only query data they have permission to access.
+
+### 工作原理 / How It Works
+
+**权限规则 / Permission Rule**：
+```sql
+WHERE gssq IN (
+    SELECT REPLACE(extend1, 'RX', '') FROM fr_user_role WHERE username='[userId]'
+)
+OR '[userId]' NOT IN (SELECT username FROM fr_user_role)
+```
+
+**逻辑说明 / Logic**：
+1. 如果用户在 `fr_user_role` 表中有记录，只能查询 `gssq` 在其 `extend1` 字段定义的权限范围内的数据
+2. 如果用户不在 `fr_user_role` 表中，可以查询所有数据（默认全部权限）
+3. 超级管理员（配置在 `SUPER_ADMIN_USERS`）豁免权限检查
+
+### 配置步骤 / Configuration Steps
+
+1. **启用权限控制 / Enable Permission Control**
+   ```env
+   ENABLE_ROLE_PERMISSION=true
+   ```
+
+2. **配置权限表 / Configure Permission Tables**
+   ```env
+   PERMISSION_TABLES=orders,products,customers,invoices
+   ```
+
+3. **（可选）自定义配置 / Optional Customization**
+   ```env
+   PERMISSION_FIELD=gssq                    # 权限字段名
+   USER_ROLE_TABLE=fr_user_role           # 用户角色表
+   USER_ROLE_USERNAME_FIELD=username       # 用户名字段
+   USER_ROLE_EXTEND_FIELD=extend1         # 权限存储字段
+   USER_ROLE_PREFIX=RX                     # 权限前缀
+   SUPER_ADMIN_USERS=admin,system          # 超级管理员
+   ```
+
+4. **调用时传入 user_id / Pass user_id When Calling**
+   ```python
+   result = await mysql_query(
+       query="SELECT * FROM orders WHERE status='pending'",
+       user_id="zhang_san"  # 必须传入用户ID
+   )
+   ```
+
+### 诊断工具 / Diagnostic Tool
+
+运行诊断脚本检查配置：
+```bash
+python diagnose_permission.py
+```
+
+该脚本会检查：
+- 权限控制是否启用
+- 权限表是否配置
+- 配置项是否正确
+- SQL 解析是否正常
+
+### 常见问题排查 / Troubleshooting
+
+**问题：权限没有生效**
+
+**排查步骤**：
+1. ✅ 运行 `python diagnose_permission.py` 检查配置
+2. ✅ 确认 `.env` 文件中 `ENABLE_ROLE_PERMISSION=true`
+3. ✅ 确认 `PERMISSION_TABLES` 配置了查询的表名
+4. ✅ 确认调用时传入了 `user_id` 参数
+5. ✅ 确认 `user_id` 不在 `SUPER_ADMIN_USERS` 列表中
+6. ✅ 确认 SQL 是 SELECT 查询（其他操作不应用权限）
+7. ✅ 查看服务器日志中的权限相关调试信息
+
+**日志示例 / Log Example**：
+```
+INFO - ✅ 角色权限控制已启用: 权限表=['orders', 'products'], 权限字段=gssq
+INFO - ✅ 已为用户 zhang_san 注入权限过滤条件
+INFO - 📝 原始 SQL: SELECT * FROM orders WHERE status='pending'
+INFO - 🔒 修改后 SQL: SELECT * FROM orders WHERE status='pending' AND (gssq IN ...)
+```
+
+如果看到 "⚠️ 未提供 user_id 参数" 或 "查询不涉及权限控制表" 等警告，请根据提示修复配置。

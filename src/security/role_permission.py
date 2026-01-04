@@ -30,9 +30,20 @@ class RolePermissionManager:
         }
 
         if self.enabled:
-            logger.info(f"角色权限控制已启用: 权限表={list(self.permission_tables)}, 权限字段={self.permission_field}")
+            if not self.permission_tables:
+                logger.warning(
+                    "⚠️ 角色权限控制已启用，但未配置权限表！"
+                    "请在环境变量中设置 PERMISSION_TABLES=表名1,表名2,..."
+                )
+            else:
+                logger.info(
+                    f"✅ 角色权限控制已启用: 权限表={list(self.permission_tables)}, 权限字段={self.permission_field}"
+                )
         else:
-            logger.debug("角色权限控制未启用")
+            logger.info(
+                "ℹ️ 角色权限控制未启用。"
+                "要启用权限控制，请在环境变量中设置 ENABLE_ROLE_PERMISSION=true"
+            )
 
     def should_apply_permission(self, sql_query: str, user_id: Optional[str]) -> bool:
         """
@@ -46,29 +57,35 @@ class RolePermissionManager:
             是否需要应用权限控制
         """
         if not self.enabled:
+            logger.debug("权限控制未启用，跳过权限过滤")
             return False
 
         if not user_id:
-            logger.debug("未提供 user_id，跳过权限控制")
+            logger.warning("⚠️ 未提供 user_id 参数，跳过权限控制。请在调用时传入 user_id 参数")
             return False
 
         # 超级管理员豁免
         if user_id in self.super_admins:
-            logger.debug(f"用户 {user_id} 是超级管理员，跳过权限控制")
+            logger.info(f"用户 {user_id} 是超级管理员，跳过权限控制")
             return False
 
         statement = self._parse_first_statement(sql_query)
         if statement is None:
-            logger.debug("SQL 解析失败，跳过权限控制")
+            logger.warning(f"SQL 解析失败，跳过权限控制。SQL: {sql_query[:100]}")
             return False
 
         if not self._is_select_statement(statement):
-            logger.debug("非 SELECT 查询，跳过权限控制")
+            logger.debug("非 SELECT 查询，跳过权限控制（仅 SELECT 查询应用行级权限）")
             return False
 
         # 检查查询是否涉及需要权限控制的表
         if not self._statement_contains_permission_tables(statement):
-            logger.debug("查询不涉及权限控制表，跳过权限控制")
+            # 提取表名用于调试
+            table_names = self._extract_table_names(statement)
+            logger.debug(
+                f"查询不涉及权限控制表，跳过权限控制。"
+                f"查询的表: {list(table_names)}, 配置的权限表: {list(self._normalized_permission_tables)}"
+            )
             return False
 
         return True
@@ -131,9 +148,9 @@ class RolePermissionManager:
         # 注入权限条件
         modified_sql = self._inject_where_clause(str(statement), permission_condition)
 
-        logger.info(f"已为用户 {user_id} 注入权限过滤条件")
-        logger.debug(f"原始 SQL: {sql_query}")
-        logger.debug(f"修改后 SQL: {modified_sql}")
+        logger.info(f"✅ 已为用户 {user_id} 注入权限过滤条件")
+        logger.info(f"📝 原始 SQL: {sql_query}")
+        logger.info(f"🔒 修改后 SQL: {modified_sql}")
 
         return modified_sql
 
@@ -278,6 +295,7 @@ class RolePermissionManager:
     def _build_permission_condition(self, user_id: str) -> str:
         """
         构建权限过滤条件
+        支持权限值格式转换：去掉 RX、Y 前缀和 销区 后缀，然后使用模糊匹配
 
         Args:
             user_id: 用户 ID
@@ -288,11 +306,31 @@ class RolePermissionManager:
         # 防止 SQL 注入 - 转义单引号
         safe_user_id = user_id.replace("'", "''")
 
+        # 构建权限值转换逻辑：
+        # 1. 去掉 RX 前缀
+        # 2. 去掉 Y 前缀（如果存在）
+        # 3. 去掉 销区 后缀（如果存在）
+        # 4. 使用模糊匹配来匹配表中的值
+        permission_value_transform = (
+            f"TRIM(REPLACE(REPLACE(REPLACE({self.extend_field}, '{self.role_prefix}', ''), 'Y', ''), '销区', ''))"
+        )
+
+        # 使用 LIKE 模糊匹配，支持权限值格式与表字段值不完全一致的情况
+        # 例如：权限值 "两湖" 可以匹配表中的 "湖北"、"湖南"、"两湖" 等
+        # 使用 EXISTS 子查询，在子查询中计算转换后的权限值并匹配
         condition = f"""(
-    {self.permission_field} IN (
-        SELECT REPLACE({self.extend_field}, '{self.role_prefix}', '')
+    EXISTS (
+        SELECT 1
+        FROM {self.user_role_table} ur
+        WHERE ur.{self.username_field} = '{safe_user_id}'
+        AND {self.permission_field} LIKE CONCAT('%', TRIM(REPLACE(REPLACE(REPLACE(ur.{self.extend_field}, '{self.role_prefix}', ''), 'Y', ''), '销区', '')), '%')
+    )
+    OR {self.permission_field} IN (
+        SELECT {permission_value_transform}
         FROM {self.user_role_table}
         WHERE {self.username_field} = '{safe_user_id}'
+        AND {permission_value_transform} IS NOT NULL
+        AND {permission_value_transform} != ''
     )
     OR '{safe_user_id}' NOT IN (
         SELECT {self.username_field} FROM {self.user_role_table}
