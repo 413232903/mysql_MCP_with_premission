@@ -37,8 +37,24 @@ class RolePermissionManager:
                 )
             else:
                 logger.info(
-                    f"✅ 角色权限控制已启用: 权限表={list(self.permission_tables)}, 权限字段={self.permission_field}"
+                    f"✅ 角色权限控制已启用"
                 )
+                logger.info(
+                    f"   - 权限表: {list(self.permission_tables)}"
+                )
+                logger.info(
+                    f"   - 权限字段: {self.permission_field}"
+                )
+                logger.info(
+                    f"   - 用户角色表: {self.user_role_table}"
+                )
+                logger.info(
+                    f"   - 权限字段前缀: {self.role_prefix}"
+                )
+                if self.super_admins:
+                    logger.info(
+                        f"   - 超级管理员: {list(self.super_admins)}"
+                    )
         else:
             logger.info(
                 "ℹ️ 角色权限控制未启用。"
@@ -133,21 +149,29 @@ class RolePermissionManager:
             注入权限过滤后的 SQL 语句
         """
         # 记录权限检查的详细信息（使用 INFO 级别确保可见）
-        logger.info(f"🔍 开始权限检查 - user_id: {user_id}, SQL: {sql_query[:100]}...")
-        logger.info(f"🔍 权限控制启用状态: {self.enabled}")
-        logger.info(f"🔍 配置的权限表: {list(self._normalized_permission_tables)}")
+        logger.info("=" * 80)
+        logger.info(f"🔐 权限控制检查开始")
+        logger.info(f"   用户ID: {user_id}")
+        logger.info(f"   SQL预览: {sql_query[:150]}...")
+        logger.info(f"   权限控制启用: {self.enabled}")
+        logger.info(f"   配置的权限表: {list(self._normalized_permission_tables)}")
         
         if not self.should_apply_permission(sql_query, user_id):
-            logger.info(f"⚠️ 权限控制未应用 - user_id: {user_id}, SQL: {sql_query[:100]}...")
+            logger.info(f"⚠️  权限控制未应用")
+            logger.info(f"   原因: 请查看上方的检查日志")
+            logger.info("=" * 80)
             return sql_query
 
         # 构建权限过滤条件
+        logger.info(f"🔧 构建权限过滤条件...")
         permission_condition = self._build_permission_condition(user_id)
+        logger.info(f"   权限条件已生成（长度: {len(permission_condition)} 字符）")
 
         # 解析 SQL
         parsed = sqlparse.parse(sql_query)
         if not parsed:
-            logger.warning("SQL 解析失败，无法注入权限条件")
+            logger.warning("❌ SQL 解析失败，无法注入权限条件")
+            logger.info("=" * 80)
             return sql_query
 
         statement = parsed[0]
@@ -155,9 +179,14 @@ class RolePermissionManager:
         # 注入权限条件
         modified_sql = self._inject_where_clause(str(statement), permission_condition)
 
-        logger.info(f"✅ 已为用户 {user_id} 注入权限过滤条件")
-        logger.info(f"📝 原始 SQL: {sql_query}")
-        logger.info(f"🔒 修改后 SQL: {modified_sql}")
+        logger.info(f"✅ 权限过滤条件已注入")
+        logger.info("-" * 80)
+        logger.info(f"📝 原始 SQL:")
+        logger.info(f"   {sql_query}")
+        logger.info("-" * 80)
+        logger.info(f"🔒 修改后 SQL:")
+        logger.info(f"   {modified_sql}")
+        logger.info("=" * 80)
 
         return modified_sql
 
@@ -324,6 +353,10 @@ class RolePermissionManager:
             f"TRIM(REPLACE(REPLACE(REPLACE({self.extend_field}, '{self.role_prefix}', ''), 'Y', ''), '销区', ''))"
         )
 
+        logger.debug(f"   权限值转换逻辑: {permission_value_transform}")
+        logger.debug(f"   权限字段: {self.permission_field}")
+        logger.debug(f"   用户角色表: {self.user_role_table}")
+
         # 使用 LIKE 模糊匹配，支持权限值格式与表字段值不完全一致的情况
         # 例如：权限值 "两湖" 可以匹配表中的 "湖北"、"湖南"、"两湖" 等
         # 使用 EXISTS 子查询，在子查询中计算转换后的权限值并匹配
@@ -345,6 +378,9 @@ class RolePermissionManager:
         SELECT {self.username_field} FROM {self.user_role_table}
     )
 )"""
+        
+        logger.debug(f"   生成的权限条件（简化）: WHERE {self.permission_field} IN (SELECT ...) OR ...")
+        
         return condition
 
     def _inject_where_clause(self, sql_query: str, condition: str) -> str:
