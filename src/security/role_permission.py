@@ -57,7 +57,7 @@ class RolePermissionManager:
             是否需要应用权限控制
         """
         if not self.enabled:
-            logger.debug("权限控制未启用，跳过权限过滤")
+            logger.info("❌ 权限控制未启用，跳过权限过滤。请在环境变量中设置 ENABLE_ROLE_PERMISSION=true")
             return False
 
         if not user_id:
@@ -66,28 +66,29 @@ class RolePermissionManager:
 
         # 超级管理员豁免
         if user_id in self.super_admins:
-            logger.info(f"用户 {user_id} 是超级管理员，跳过权限控制")
+            logger.info(f"ℹ️ 用户 {user_id} 是超级管理员，跳过权限控制")
             return False
 
         statement = self._parse_first_statement(sql_query)
         if statement is None:
-            logger.warning(f"SQL 解析失败，跳过权限控制。SQL: {sql_query[:100]}")
+            logger.warning(f"❌ SQL 解析失败，跳过权限控制。SQL: {sql_query[:100]}")
             return False
 
         if not self._is_select_statement(statement):
-            logger.debug("非 SELECT 查询，跳过权限控制（仅 SELECT 查询应用行级权限）")
+            logger.info("ℹ️ 非 SELECT 查询，跳过权限控制（仅 SELECT 查询应用行级权限）")
             return False
 
         # 检查查询是否涉及需要权限控制的表
+        table_names = self._extract_table_names(statement)
+        logger.info(f"🔍 解析到的表名: {list(table_names)}")
         if not self._statement_contains_permission_tables(statement):
-            # 提取表名用于调试
-            table_names = self._extract_table_names(statement)
-            logger.debug(
-                f"查询不涉及权限控制表，跳过权限控制。"
+            logger.info(
+                f"⚠️ 查询不涉及权限控制表，跳过权限控制。"
                 f"查询的表: {list(table_names)}, 配置的权限表: {list(self._normalized_permission_tables)}"
             )
             return False
 
+        logger.info(f"✅ 权限检查通过，将应用权限过滤 - user_id: {user_id}, 涉及表: {list(table_names)}")
         return True
 
     def _parse_first_statement(self, sql_query: str) -> Optional[TokenList]:
@@ -131,7 +132,13 @@ class RolePermissionManager:
         Returns:
             注入权限过滤后的 SQL 语句
         """
+        # 记录权限检查的详细信息（使用 INFO 级别确保可见）
+        logger.info(f"🔍 开始权限检查 - user_id: {user_id}, SQL: {sql_query[:100]}...")
+        logger.info(f"🔍 权限控制启用状态: {self.enabled}")
+        logger.info(f"🔍 配置的权限表: {list(self._normalized_permission_tables)}")
+        
         if not self.should_apply_permission(sql_query, user_id):
+            logger.info(f"⚠️ 权限控制未应用 - user_id: {user_id}, SQL: {sql_query[:100]}...")
             return sql_query
 
         # 构建权限过滤条件
@@ -203,7 +210,9 @@ class RolePermissionManager:
         if table_names:
             logger.debug(f"解析到的表名: {table_names}")
 
-        return any(table in self._normalized_permission_tables for table in table_names)
+        has_permission_table = any(table in self._normalized_permission_tables for table in table_names)
+        logger.debug(f"是否包含权限表: {has_permission_table}, 查询表: {list(table_names)}, 权限表: {list(self._normalized_permission_tables)}")
+        return has_permission_table
 
     def _extract_table_names(self, token_list: TokenList) -> Set[str]:
         """

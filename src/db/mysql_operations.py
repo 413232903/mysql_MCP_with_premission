@@ -369,8 +369,13 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
 
     try:
         # 应用角色权限过滤
+        logger.info(f"🔐 开始应用权限过滤 - user_id: {user_id}, 原始查询: {query[:100]}...")
         permission_manager = get_role_permission_manager()
         filtered_query = permission_manager.inject_permission_filter(query, user_id)
+        if filtered_query != query:
+            logger.info(f"✅ SQL 已被权限过滤修改")
+        else:
+            logger.info(f"ℹ️ SQL 未被权限过滤修改（可能未启用权限控制或不符合条件）")
 
         # 安全检查
         if not await sql_interceptor.check_operation(filtered_query):
