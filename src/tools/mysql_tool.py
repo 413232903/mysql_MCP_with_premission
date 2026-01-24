@@ -33,19 +33,25 @@ def register_mysql_tool(mcp: FastMCP):
     
     @mcp.tool()
     @MetadataToolBase.handle_query_error
-    async def mysql_query(query: str, user_id: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> str:
+    async def mysql_query(query: str, user_id: Optional[str] = None, userid: Optional[str] = None, params: Optional[Dict[str, Any]] = None) -> str:
         """
         执行MySQL查询并返回结果
 
         Args:
             query: SQL查询语句
             user_id: 用户ID，用于权限控制（可选）
+            userid: 用户ID的别名，兼容不同调用方式（可选）
             params: 查询参数 (可选)
 
         Returns:
             查询结果的JSON字符串
         """
-        logger.debug(f"执行MySQL查询: {query}, 用户: {user_id}, 参数: {params}")
+        # 兼容多种 user_id 传递方式（优先级：user_id > userid > params.userid）
+        effective_user_id = user_id or userid
+        if not effective_user_id and params:
+            effective_user_id = params.pop('userid', None) or params.pop('user_id', None)
+
+        logger.debug(f"执行MySQL查询: {query}, 用户: {effective_user_id}, 参数: {params}")
 
         # 检查数据库隔离限制
         if database_checker:
@@ -55,8 +61,8 @@ def register_mysql_tool(mcp: FastMCP):
                 raise ValueError(f"数据库隔离限制: {violation_details}")
 
         async with get_db_connection() as connection:
-            # 传递 user_id 到数据库操作层
-            results = await execute_query(connection, query, params, user_id=user_id)
+            # 传递 effective_user_id 到数据库操作层
+            results = await execute_query(connection, query, params, user_id=effective_user_id)
             
             # 检查是否是修改操作返回的影响行数
             operation = query.strip().split()[0].upper()
