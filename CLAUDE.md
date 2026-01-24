@@ -303,21 +303,43 @@ ORDER BY created_at DESC
 
 ### 实现层级
 
-权限过滤在**数据库操作层**实现（`src/db/mysql_operations.py:execute_query`），在 SQL 执行前自动注入权限条件。执行顺序：
+权限过滤在**数据库操作层**实现（`src/db/mysql_operations.py:execute_query`），在 SQL 执行前自动注入权限条件。
+
+**用户身份获取方式**（优先级从高到低）：
+1. 工具参数显式传递 `user_id`
+2. 从 SSE 连接 URL 参数自动获取（`?user_id=工号`）
+
+执行顺序：
 
 ```
-1. 用户调用 MCP 工具（传入 user_id）
+1. AI 软件建立 SSE 连接: /sse2?user_id=工号
    ↓
-2. execute_query 接收原始 SQL 和 user_id
+2. UserIdentityMiddleware 提取 user_id 存储到 contextvars
    ↓
-3. RolePermissionManager.inject_permission_filter()
+3. 用户通过 AI 调用 MCP 工具
+   ↓
+4. execute_query 自动从上下文获取 user_id
+   ↓
+5. RolePermissionManager.inject_permission_filter()
    - 检查是否需要应用权限（表白名单、超级管理员）
    - 构建权限过滤条件
    - 智能注入到 SQL 语句
    ↓
-4. SQL 安全检查（SQL 拦截器）
+6. SQL 安全检查（SQL 拦截器）
    ↓
-5. 执行过滤后的 SQL
+7. 执行过滤后的 SQL
+```
+
+### 用户身份自动注入
+
+系统通过 `src/context/` 模块实现请求级别的用户身份自动注入：
+
+- **user_context.py**: 使用 `contextvars.ContextVar` 存储当前请求的用户 ID（协程安全）
+- **middleware.py**: Starlette 中间件，从 SSE 连接 URL 参数提取 user_id
+
+AI 软件只需在建立 MCP 连接时传递用户工号：
+```
+SSE 地址: http://your-server:3000/sse2?user_id=用户工号
 ```
 
 ### 日志追踪

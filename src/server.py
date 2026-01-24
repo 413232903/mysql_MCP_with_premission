@@ -19,6 +19,7 @@ from src.tools.mysql_tool import register_mysql_tool
 from src.tools.mysql_metadata_tool import register_metadata_tools
 from src.tools.mysql_info_tool import register_info_tools
 from src.tools.mysql_schema_tool import register_schema_tools
+from src.context.middleware import UserIdentityMiddleware
 
 # 配置日志
 def _setup_logging() -> None:
@@ -219,6 +220,27 @@ async def init_database():
         logger.error(f"数据库连接池初始化失败: {str(e)}")
         print(f"警告: 数据库连接池初始化失败: {str(e)}")
 
+async def run_sse_with_middleware():
+    """使用自定义中间件启动 SSE 服务器"""
+    import uvicorn
+
+    # 获取 SSE 应用
+    starlette_app = mcp.sse_app(mount_path)
+
+    # 添加用户身份中间件
+    starlette_app.add_middleware(UserIdentityMiddleware)
+    logger.info("已添加用户身份中间件，支持从 URL 参数获取 user_id")
+
+    # 配置并启动 uvicorn
+    config = uvicorn.Config(
+        starlette_app,
+        host=host,
+        port=port,
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
+
 def start_server():
     """启动SSE服务器的同步包装器"""
     logger.debug("开始启动MySQL查询服务器...")
@@ -228,17 +250,19 @@ def start_server():
     if not full_path:
         full_path = '/'  # 理论不会出现，因为 sse_path 不允许 '/'
     print(f"服务器监听在 {host}:{port}{full_path}")
-    
+    print(f"用户身份参数: ?user_id=工号")
+
     try:
         # 检查MySQL配置是否有效并初始化连接池
         if mysql_available:
             # 使用事件循环执行异步初始化函数
             _server_data['loop'] = asyncio.get_event_loop()
             _server_data['loop'].run_until_complete(init_database())
-        
-        # 使用run_app函数启动服务器
-        logger.debug("调用 mcp.run('sse', mount_path=%s) 启动服务器...", mount_path)
-        mcp.run('sse', mount_path=mount_path)
+
+        # 使用自定义的启动函数（包含中间件）
+        logger.debug("调用自定义 run_sse_with_middleware() 启动服务器...")
+        import anyio
+        anyio.run(run_sse_with_middleware)
     except Exception as e:
         logger.exception(f"服务器运行时发生错误: {str(e)}")
         print(f"服务器运行时发生错误: {str(e)}")

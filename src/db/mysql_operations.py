@@ -12,6 +12,7 @@ from ..security.sql_analyzer import SQLOperationType
 from ..security.interceptor import SQLInterceptor, SecurityException
 from ..security.sql_parser import SQLParser
 from ..security.role_permission import get_role_permission_manager
+from ..context.user_context import get_current_user_id
 
 logger = logging.getLogger("mysql_server")
 
@@ -354,7 +355,7 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
         params: 查询参数 (可选)
         batch_size: 批处理大小，控制每次从游标获取的记录数量 (仅当stream_results=True时有效)
         stream_results: 是否使用流式处理获取大型结果集
-        user_id: 用户ID，用于角色权限控制 (可选)
+        user_id: 用户ID，用于角色权限控制 (可选，如果未提供将自动从请求上下文获取)
 
     Returns:
         查询结果列表，如果是修改操作则返回影响的行数
@@ -368,10 +369,17 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
     start_time = time.time()  # 记录查询开始时间
 
     try:
+        # 如果未显式传递 user_id，自动从请求上下文获取
+        effective_user_id = user_id
+        if effective_user_id is None:
+            effective_user_id = get_current_user_id()
+            if effective_user_id:
+                logger.debug(f"从请求上下文自动获取用户ID: {effective_user_id}")
+
         # 应用角色权限过滤
-        logger.info(f"🔐 开始应用权限过滤 - user_id: {user_id}, 原始查询: {query[:100]}...")
+        logger.info(f"🔐 开始应用权限过滤 - user_id: {effective_user_id}, 原始查询: {query[:100]}...")
         permission_manager = get_role_permission_manager()
-        filtered_query = permission_manager.inject_permission_filter(query, user_id)
+        filtered_query = permission_manager.inject_permission_filter(query, effective_user_id)
         if filtered_query != query:
             logger.info(f"✅ SQL 已被权限过滤修改")
         else:
