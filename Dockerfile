@@ -5,11 +5,9 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# 复制本地代码到镜像
+# 复制本地代码到镜像（排除 .env 以避免覆盖运行时环境变量）
 COPY . .
-
-# 自动生成 .env（如不存在则复制 example.env）
-RUN [ -f .env ] || cp example.env .env
+RUN if [ -f .env ]; then rm .env; fi
 
 # 安装依赖
 RUN pip install --no-cache-dir -r requirements.txt
