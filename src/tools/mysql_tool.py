@@ -47,9 +47,33 @@ def register_mysql_tool(mcp: FastMCP):
             查询结果的JSON字符串
         """
         # 兼容多种 user_id 传递方式（优先级：user_id > userid > params.userid）
+        logger.info("=" * 80)
+        logger.info("🔥 用户 ID 提取调试")
+        logger.info(f"   直接参数 user_id: {user_id}")
+        logger.info(f"   直接参数 userid: {userid}")
+        logger.info(f"   params 参数: {params}")
+
         effective_user_id = user_id or userid
+        logger.info(f"   第一步（user_id or userid）: {effective_user_id}")
+
         if not effective_user_id and params:
-            effective_user_id = params.pop('userid', None) or params.pop('user_id', None)
+            # 尝试从 params 中提取
+            popped_userid = params.pop('userid', None)
+            popped_user_id = params.pop('user_id', None)
+            effective_user_id = popped_userid or popped_user_id
+            logger.info(f"   从 params pop 出 userid: {popped_userid}")
+            logger.info(f"   从 params pop 出 user_id: {popped_user_id}")
+            logger.info(f"   第二步结果: {effective_user_id}")
+
+            # 兼容处理：如果 pop 失败但 params 中仍有 user_id，直接取值
+            if not effective_user_id and 'user_id' in params:
+                effective_user_id = params['user_id']
+                del params['user_id']
+                logger.info(f"   兼容处理：从 params 直接获取 user_id: {effective_user_id}")
+
+        logger.info(f"   最终 effective_user_id: {effective_user_id}")
+        logger.info(f"   处理后 params: {params}")
+        logger.info("=" * 80)
 
         logger.debug(f"执行MySQL查询: {query}, 用户: {effective_user_id}, 参数: {params}")
 
