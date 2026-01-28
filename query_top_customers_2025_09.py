@@ -45,51 +45,46 @@ async def query_top_customers():
     
     try:
         async with get_db_connection() as connection:
-            # 执行查询，传入 user_id 以应用权限控制
+            # 执行查询，传入user_id用于权限控制
             results = await execute_query(connection, query, user_id=user_id)
             
-            print(f"查询成功！共返回 {len(results)} 条记录")
-            print()
-            print("=" * 80)
-            print("排名前十的客户名称：")
-            print("=" * 80)
-            print()
+            if not results:
+                print("⚠️  未找到符合条件的客户数据")
+                return
             
-            # 显示结果
-            for i, row in enumerate(results, 1):
-                customer_name = row.get('customer_name', '')
+            print(f"✅ 查询成功！共找到 {len(results)} 条记录")
+            print()
+            print("=" * 80)
+            print("排名 | 客户名称 | 超资信额 | 销售区域")
+            print("=" * 80)
+            
+            for idx, row in enumerate(results, 1):
+                customer_name = row.get('customer_name', '未知')
                 over_credit_amount = row.get('over_credit_amount', 0)
-                sales_region = row.get('sales_region', '')
+                sales_region = row.get('sales_region', '未知')
                 
-                # 格式化金额
-                if over_credit_amount:
-                    amount_str = f"{float(over_credit_amount):,.2f}"
+                # 格式化超资信额（如果是数字）
+                if isinstance(over_credit_amount, (int, float)):
+                    amount_str = f"{over_credit_amount:,.2f}"
                 else:
-                    amount_str = "0.00"
+                    amount_str = str(over_credit_amount)
                 
-                print(f"{i:2d}. {customer_name}")
-                print(f"    超资信额：{amount_str} 元")
-                if sales_region:
-                    print(f"    销区：{sales_region}")
-                print()
+                print(f"{idx:4d} | {customer_name:20s} | {amount_str:>15s} | {sales_region}")
             
-            # 只返回客户名称列表
             print("=" * 80)
-            print("客户名称列表：")
-            print("=" * 80)
-            customer_names = [row.get('customer_name', '') for row in results]
-            for i, name in enumerate(customer_names, 1):
-                print(f"{i:2d}. {name}")
-            
-            return results
+            print()
+            print("【客户名称列表】")
+            print("-" * 80)
+            for idx, row in enumerate(results, 1):
+                customer_name = row.get('customer_name', '未知')
+                print(f"{idx}. {customer_name}")
             
     except Exception as e:
-        print(f"查询失败：{str(e)}")
+        print(f"❌ 查询失败: {str(e)}")
         import traceback
         traceback.print_exc()
-        return None
 
 if __name__ == "__main__":
-    results = asyncio.run(query_top_customers())
+    asyncio.run(query_top_customers())
 
 

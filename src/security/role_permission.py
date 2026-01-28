@@ -333,7 +333,9 @@ class RolePermissionManager:
     def _build_permission_condition(self, user_id: str) -> str:
         """
         构建权限过滤条件
-        支持权限值格式转换：去掉 RX、Y 前缀和 销区 后缀，然后使用模糊匹配
+        基于 CW_AI_range 表的权限控制逻辑：
+        1. gssq 在用户对应的 PARENTDEPT 列表中，且 COMPANYNAME='千金药业'
+        2. 或者用户角色是'管理员'且 COMPANYNAME='千金药业'
 
         Args:
             user_id: 用户 ID
@@ -343,43 +345,44 @@ class RolePermissionManager:
         """
         # 防止 SQL 注入 - 转义单引号
         safe_user_id = user_id.replace("'", "''")
+        safe_company_name = '千金药业'.replace("'", "''")
+        safe_admin_role = '管理员'.replace("'", "''")
 
-        # 构建权限值转换逻辑：
-        # 1. 去掉 RX 前缀
-        # 2. 去掉 Y 前缀（如果存在）
-        # 3. 去掉 销区 后缀（如果存在）
-        # 4. 使用模糊匹配来匹配表中的值
-        permission_value_transform = (
-            f"TRIM(REPLACE(REPLACE(REPLACE({self.extend_field}, '{self.role_prefix}', ''), 'Y', ''), '销区', ''))"
-        )
+        # 权限表配置
+        permission_table = 'CW_AI_range'
+        opcode_field = 'OPCODE'
+        parentdept_field = 'PARENTDEPT'
+        rolename_field = 'ROLENAME'
+        companyname_field = 'COMPANYNAME'
 
-        logger.debug(f"   权限值转换逻辑: {permission_value_transform}")
         logger.debug(f"   权限字段: {self.permission_field}")
-        logger.debug(f"   用户角色表: {self.user_role_table}")
+        logger.debug(f"   权限表: {permission_table}")
+        logger.debug(f"   用户ID字段: {opcode_field}")
 
-        # 使用 LIKE 模糊匹配，支持权限值格式与表字段值不完全一致的情况
-        # 例如：权限值 "两湖" 可以匹配表中的 "湖北"、"湖南"、"两湖" 等
-        # 使用 EXISTS 子查询，在子查询中计算转换后的权限值并匹配
+        # 构建新的权限过滤条件
+        # 条件1: gssq IN (SELECT PARENTDEPT FROM CW_AI_range WHERE OPCODE={safe_user_id}) AND COMPANYNAME='千金药业'
+        # 条件2: (SELECT ROLENAME FROM CW_AI_range WHERE OPCODE={safe_user_id})='管理员' AND COMPANYNAME='千金药业'
         condition = f"""(
-    EXISTS (
-        SELECT 1
-        FROM {self.user_role_table} ur
-        WHERE ur.{self.username_field} = '{safe_user_id}'
-        AND {self.permission_field} LIKE CONCAT('%', TRIM(REPLACE(REPLACE(REPLACE(ur.{self.extend_field}, '{self.role_prefix}', ''), 'Y', ''), '销区', '')), '%')
+    (
+        `{self.permission_field}` IN (
+            SELECT `{parentdept_field}`
+            FROM `{permission_table}`
+            WHERE `{opcode_field}` = '{safe_user_id}'
+        )
+        AND `{companyname_field}` = '{safe_company_name}'
     )
-    OR {self.permission_field} IN (
-        SELECT {permission_value_transform}
-        FROM {self.user_role_table}
-        WHERE {self.username_field} = '{safe_user_id}'
-        AND {permission_value_transform} IS NOT NULL
-        AND {permission_value_transform} != ''
-    )
-    OR '{safe_user_id}' NOT IN (
-        SELECT {self.username_field} FROM {self.user_role_table}
+    OR (
+        (
+            SELECT `{rolename_field}`
+            FROM `{permission_table}`
+            WHERE `{opcode_field}` = '{safe_user_id}'
+            LIMIT 1
+        ) = '{safe_admin_role}'
+        AND `{companyname_field}` = '{safe_company_name}'
     )
 )"""
         
-        logger.debug(f"   生成的权限条件（简化）: WHERE {self.permission_field} IN (SELECT ...) OR ...")
+        logger.debug(f"   生成的权限条件: gssq IN (SELECT PARENTDEPT FROM CW_AI_range WHERE OPCODE=...) OR ROLENAME='管理员'")
         
         return condition
 

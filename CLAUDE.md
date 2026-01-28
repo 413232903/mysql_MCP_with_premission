@@ -87,7 +87,13 @@ cp .env.example .env
 python -m src.server
 ```
 
-服务器将监听在 `http://127.0.0.1:3000/sse2` (默认配置)
+服务器将监听在 `http://{HOST}:{PORT}{MOUNT_PATH.rstrip('/')}{SSE_PATH}`，默认 `http://127.0.0.1:3000/sse2`
+
+**SSE 路径配置说明**：
+- `SSE_PATH`: SSE 推送端点路径（默认 `/sse2`），可通过环境变量修改
+- `MOUNT_PATH`: MCP 基础挂载路径（默认 `/`），用于设置基础路由前缀
+- 最终访问路径会自动拼接：`http://HOST:PORT{MOUNT_PATH.rstrip('/')}{SSE_PATH}`
+- 例如：`MOUNT_PATH=/api`, `SSE_PATH=/sse3` → 最终路径为 `http://127.0.0.1:3000/api/sse3`
 
 **注意**: FastMCP 框架使用 `sse_path` 参数配置 SSE 路径，不是 `endpoint`。
 

@@ -150,6 +150,7 @@ class RolePermissionConfig:
     ENABLE_ROLE_PERMISSION = os.getenv('ENABLE_ROLE_PERMISSION', 'false').lower() in ('true', 'yes', '1')
 
     # 需要应用权限过滤的表列表（逗号分隔）
+    # 注意：os.getenv() 只接受两个参数（键和默认值），多个表名需要用逗号连接成一个字符串
     PERMISSION_TABLES_STR = os.getenv('PERMISSION_TABLES', '')
     PERMISSION_TABLES = set(
         table.strip() for table in PERMISSION_TABLES_STR.split(',') if table.strip()
