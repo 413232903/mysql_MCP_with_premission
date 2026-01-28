@@ -334,8 +334,8 @@ class RolePermissionManager:
         """
         构建权限过滤条件
         基于 CW_AI_range 表的权限控制逻辑：
-        1. gssq 在用户对应的 PARENTDEPT 列表中，且 COMPANYNAME='千金药业'
-        2. 或者用户角色是'管理员'且 COMPANYNAME='千金药业'
+        1. gssq 在用户对应的 PARENTDEPT 列表中
+        2. 或者用户角色是'管理员'
 
         Args:
             user_id: 用户 ID
@@ -345,7 +345,6 @@ class RolePermissionManager:
         """
         # 防止 SQL 注入 - 转义单引号
         safe_user_id = user_id.replace("'", "''")
-        safe_company_name = '千金药业'.replace("'", "''")
         safe_admin_role = '管理员'.replace("'", "''")
 
         # 权限表配置
@@ -353,15 +352,14 @@ class RolePermissionManager:
         opcode_field = 'OPCODE'
         parentdept_field = 'PARENTDEPT'
         rolename_field = 'ROLENAME'
-        companyname_field = 'COMPANYNAME'
 
         logger.debug(f"   权限字段: {self.permission_field}")
         logger.debug(f"   权限表: {permission_table}")
         logger.debug(f"   用户ID字段: {opcode_field}")
 
         # 构建新的权限过滤条件
-        # 条件1: gssq IN (SELECT PARENTDEPT FROM CW_AI_range WHERE OPCODE={safe_user_id}) AND COMPANYNAME='千金药业'
-        # 条件2: (SELECT ROLENAME FROM CW_AI_range WHERE OPCODE={safe_user_id})='管理员' AND COMPANYNAME='千金药业'
+        # 条件1: gssq IN (SELECT PARENTDEPT FROM CW_AI_range WHERE OPCODE={safe_user_id})
+        # 条件2: (SELECT ROLENAME FROM CW_AI_range WHERE OPCODE={safe_user_id})='管理员'
         condition = f"""(
     (
         `{self.permission_field}` IN (
