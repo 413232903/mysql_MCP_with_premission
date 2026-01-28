@@ -369,7 +369,6 @@ class RolePermissionManager:
             FROM `{permission_table}`
             WHERE `{opcode_field}` = '{safe_user_id}'
         )
-        AND `{companyname_field}` = '{safe_company_name}'
     )
     OR (
         (
@@ -378,7 +377,6 @@ class RolePermissionManager:
             WHERE `{opcode_field}` = '{safe_user_id}'
             LIMIT 1
         ) = '{safe_admin_role}'
-        AND `{companyname_field}` = '{safe_company_name}'
     )
 )"""
         
