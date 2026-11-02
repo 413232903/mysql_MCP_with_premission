@@ -1,6 +1,12 @@
 # 需要 Python 3.12.3 及以上版本 / Requires Python >=3.12.3
-mcp>=1.4.1
+# mcp 收敛到 >=1.9,<2：server.py 显式组装 sse_app + 鉴权中间件
+# （通过 inspect 自动兼容新旧版本的 sse_app 签名，已在 1.27.x / 1.30.x 验证）
+mcp>=1.9,<2
 aiomysql>=0.2.0
 python-dotenv>=1.0.1
 sqlparse>=0.5.3
 cryptography>=3.4.8
+# server.py 组装鉴权中间件时直接依赖（原为 mcp 的传递依赖，显式声明避免隐式升级破坏）
+starlette>=0.27
+uvicorn>=0.23
+# 测试依赖（可选）: pip install pytest httpx

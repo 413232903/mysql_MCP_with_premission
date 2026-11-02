@@ -24,7 +24,9 @@ class ServerConfig:
     MOUNT_PATH = os.getenv('MOUNT_PATH', '/')
     # SSE 推送端点路径，默认 '/sse2'，可通过环境变量按需调整
     SSE_PATH = os.getenv('SSE_PATH', '/sse2')
-    
+    # 调试模式（生产环境强制关闭，见 server.py）
+    DEBUG = os.getenv('SERVER_DEBUG', 'false').lower() in ('true', 'yes', '1')
+
 # 数据库配置
 class DatabaseConfig:
     """数据库连接配置"""
@@ -169,4 +171,99 @@ class RolePermissionConfig:
     SUPER_ADMIN_USERS_STR = os.getenv('SUPER_ADMIN_USERS', '')
     SUPER_ADMIN_USERS = set(
         user.strip() for user in SUPER_ADMIN_USERS_STR.split(',') if user.strip()
-    ) 
+    )
+
+# MCP服务鉴权配置（传输层Header鉴权，安全整改要求）
+class AuthConfig:
+    """MCP服务鉴权配置
+
+    鉴权在 HTTP Header 校验层完成（src/security/auth/middleware.py:AuthMiddleware），
+    覆盖 SSE 流端点与消息端点，未鉴权请求无法建立 MCP 会话。支持两种模式：
+
+    - token: Authorization: Bearer <token>，服务端只存 SHA-256 哈希，明文不上网（配合 HTTPS）
+             适用于百炼平台等只能配置静态 Header 的调用方
+    - hmac:  X-Auth-Key / X-Auth-Timestamp / X-Auth-Nonce / X-Auth-Signature 签名校验，
+             AppSecret 永不离开客户端，带时间窗 + Nonce 防重放，适用于自研后端/网关
+    """
+    # 鉴权总开关（生产环境必须启用，否则 server.py 拒绝启动）
+    ENABLED = os.getenv('ENABLE_AUTH', 'false').lower() in ('true', 'yes', '1')
+
+    # 鉴权模式: token | hmac | both
+    MODE = os.getenv('AUTH_MODE', 'both').lower()
+    if MODE not in ('token', 'hmac', 'both'):
+        MODE = 'both'
+
+    # 执行模式: off(直接放行，仅本地调试) | audit(未鉴权只记日志不拦截，灰度观察) | enforce(拦截)
+    ENFORCE_MODE = os.getenv('AUTH_ENFORCE_MODE', 'enforce').lower()
+    if ENFORCE_MODE not in ('off', 'audit', 'enforce'):
+        ENFORCE_MODE = 'enforce'
+
+    # Bearer Token 凭据存储后端: env | db
+    TOKEN_BACKEND = os.getenv('AUTH_TOKEN_BACKEND', 'env').lower()
+    if TOKEN_BACKEND not in ('env', 'db'):
+        TOKEN_BACKEND = 'env'
+
+    # env 后端 Token 配置（服务端只存哈希，禁止存明文）
+    # 格式: client_id:token_sha256_hex[:user_id][:expires_at][:scopes]，多组用分号分隔
+    # 用 scripts/gen_token.py token --client-id xxx 生成
+    TOKENS_STR = os.getenv('AUTH_TOKENS', '')
+
+    # db 后端 Token 表名（建表语句见 docs/sql/auth_tables.sql）
+    TOKEN_TABLE = os.getenv('AUTH_TOKEN_TABLE', 'mcp_auth_token')
+
+    # env 后端 HMAC 密钥配置
+    # 格式: app_key:app_secret[:client_id][:user_id][:scopes]，多组用分号分隔
+    # 用 scripts/gen_token.py hmac-key --client-id xxx 生成
+    HMAC_KEYS_STR = os.getenv('AUTH_HMAC_KEYS', '')
+
+    # db 后端 HMAC 密钥表名
+    HMAC_KEY_TABLE = os.getenv('AUTH_HMAC_KEY_TABLE', 'mcp_auth_key')
+
+    # 签名时间戳允许偏差（秒），防重放窗口的一半
+    TIMESTAMP_TOLERANCE = int(os.getenv('AUTH_TIMESTAMP_TOLERANCE', '300'))
+
+    # Nonce 防重放缓存存活时间（秒），应 >= 2 倍时间戳偏差
+    NONCE_TTL = int(os.getenv('AUTH_NONCE_TTL', '600'))
+
+    # 豁免鉴权的路径（逗号分隔），仅用于探活类端点
+    EXEMPT_PATHS_STR = os.getenv('AUTH_EXEMPT_PATHS', '/health')
+    EXEMPT_PATHS = set(p.strip() for p in EXEMPT_PATHS_STR.split(',') if p.strip())
+
+    # 行级权限身份绑定：凭据绑定的 user_id 优先于工具入参（入参不一致直接拒绝）
+    BIND_USER = os.getenv('AUTH_BIND_USER', 'true').lower() in ('true', 'yes', '1')
+
+    # 防爆破：同 IP 连续失败阈值与封禁时长（秒）
+    MAX_FAILURES = int(os.getenv('AUTH_MAX_FAILURES', '10'))
+    BLOCK_SECONDS = int(os.getenv('AUTH_BLOCK_SECONDS', '600'))
+
+    # db 后端凭据查询缓存 TTL（秒），吊销操作最迟此时长后生效
+    CREDENTIAL_CACHE_TTL = int(os.getenv('AUTH_CREDENTIAL_CACHE_TTL', '60'))
+
+    # 生产环境收紧：强制执行模式不可降级为 audit/off
+    # （未启用鉴权时由 server.py fail-fast 拒绝启动）
+    if SecurityConfig.ENV_TYPE == EnvironmentType.PRODUCTION and ENFORCE_MODE != 'enforce':
+        ENFORCE_MODE = 'enforce'
+        logger = __import__('logging').getLogger("mysql_server")
+        logger.info("生产环境自动将鉴权执行模式设为 enforce")
+
+    @staticmethod
+    def get_config():
+        """构建鉴权配置快照（AuthSettings），供 AuthMiddleware 使用"""
+        from src.security.auth.settings import AuthSettings
+        return AuthSettings(
+            enabled=AuthConfig.ENABLED,
+            mode=AuthConfig.MODE,
+            enforce_mode=AuthConfig.ENFORCE_MODE,
+            token_backend=AuthConfig.TOKEN_BACKEND,
+            tokens_str=AuthConfig.TOKENS_STR,
+            token_table=AuthConfig.TOKEN_TABLE,
+            hmac_keys_str=AuthConfig.HMAC_KEYS_STR,
+            hmac_key_table=AuthConfig.HMAC_KEY_TABLE,
+            timestamp_tolerance=AuthConfig.TIMESTAMP_TOLERANCE,
+            nonce_ttl=AuthConfig.NONCE_TTL,
+            exempt_paths=frozenset(AuthConfig.EXEMPT_PATHS),
+            bind_user=AuthConfig.BIND_USER,
+            max_failures=AuthConfig.MAX_FAILURES,
+            block_seconds=AuthConfig.BLOCK_SECONDS,
+            credential_cache_ttl=AuthConfig.CREDENTIAL_CACHE_TTL,
+        ) 

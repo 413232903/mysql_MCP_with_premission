@@ -166,6 +166,7 @@ class RolePermissionManager:
         logger.info(f"🔧 构建权限过滤条件...")
         permission_condition = self._build_permission_condition(user_id)
         logger.info(f"   权限条件已生成（长度: {len(permission_condition)} 字符）")
+        logger.debug(f"   权限条件内容: {permission_condition}")
 
         # 解析 SQL
         parsed = sqlparse.parse(sql_query)

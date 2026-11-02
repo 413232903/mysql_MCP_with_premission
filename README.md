@@ -18,6 +18,9 @@ This project is a MySQL query server based on the MCP framework, supporting real
 - 丰富的MySQL元数据与结构查询API
 - 自动事务管理与回滚
 - 多级SQL风险控制与注入防护
+- **传输层Header鉴权**：Bearer Token + HMAC签名双模式，MCP会话建立前完成校验
+- **防重放与防爆破**：时间戳窗口 + Nonce缓存 + 失败限速封禁
+- **身份绑定**：凭据绑定user_id，防止明文参数伪造越权
 - **数据库隔离安全**：防止跨数据库访问，支持三级访问控制
 - 敏感信息自动隐藏与自定义
 - 灵活的环境变量配置
@@ -30,6 +33,9 @@ This project is a MySQL query server based on the MCP framework, supporting real
 - Rich MySQL metadata & schema query APIs
 - Automatic transaction management & rollback
 - Multi-level SQL risk control & injection protection
+- **Transport-layer Header Authentication**: Bearer Token + HMAC signature, verified before MCP session establishment
+- **Anti-replay & Anti-brute-force**: Timestamp window + nonce cache + IP rate limiting
+- **Identity Binding**: Credential-bound user_id prevents plaintext parameter spoofing
 - **Database Isolation Security**: Prevents cross-database access with 3-level access control
 - Automatic and customizable sensitive info masking
 - Flexible environment variable configuration
@@ -108,13 +114,26 @@ Default endpoint: `http://{HOST}:{PORT}{MOUNT_PATH.rstrip('/')}{SSE_PATH}` (defa
 │   ├── security/
 │   │   ├── interceptor.py      # SQL拦截 / SQL interception
 │   │   ├── query_limiter.py    # 风险控制 / Risk control
-│   │   └── sql_analyzer.py     # SQL分析 / SQL analysis
+│   │   ├── sql_analyzer.py     # SQL分析 / SQL analysis
+│   │   ├── role_permission.py  # 行级权限 / Row-level permission
+│   │   └── auth/               # 传输层鉴权 / Transport-layer auth
+│   │       ├── middleware.py       # ASGI鉴权中间件 / ASGI auth middleware
+│   │       ├── token_store.py      # Bearer Token存储 / Token store
+│   │       ├── hmac_verifier.py    # HMAC签名验证 / HMAC verification
+│   │       ├── identity.py         # 身份上下文与绑定 / Identity context
+│   │       ├── nonce_cache.py      # Nonce防重放 / Anti-replay cache
+│   │       └── health.py           # 探活端点 / Health endpoint
 │   └── tools/
 │       ├── mysql_tool.py           # 基础查询 / Basic query
 │       ├── mysql_metadata_tool.py  # 元数据查询 / Metadata query
 │       ├── mysql_info_tool.py      # 信息查询 / Info query
 │       ├── mysql_schema_tool.py    # 结构查询 / Schema query
 │       └── metadata_base_tool.py   # 工具基类 / Tool base class
+├── scripts/
+│   └── gen_token.py        # 凭据签发工具 / Credential generator
+├── docs/                   # 方案文档与建表SQL / Design docs & SQL
+├── examples/
+│   └── client_with_auth.py # 鉴权客户端示例 / Auth client examples
 ├── tests/                  # 测试 / Tests
 ├── .env.example            # 环境变量示例 / Env example
 └── requirements.txt        # 依赖 / Requirements
@@ -160,9 +179,28 @@ Default endpoint: `http://{HOST}:{PORT}{MOUNT_PATH.rstrip('/')}{SSE_PATH}` (defa
 | **USER_ROLE_EXTEND_FIELD** | **用户角色表中存储权限的字段 / Permission field in user role table** | **extend1** |
 | **USER_ROLE_PREFIX** | **权限标识前缀 / Permission prefix** | **RX** |
 | **SUPER_ADMIN_USERS** | **超级管理员列表（逗号分隔）/ Super admin users (comma-separated)** | **(空/empty)** |
+| **ENABLE_AUTH** | **鉴权总开关（生产环境必须为true）/ Auth switch (required in production)** | **false** |
+| **AUTH_MODE** | **鉴权模式(token/hmac/both) / Auth mode** | **both** |
+| **AUTH_ENFORCE_MODE** | **执行模式(off/audit/enforce) / Enforce mode** | **enforce** |
+| **AUTH_TOKEN_BACKEND** | **Token凭据后端(env/db) / Token backend** | **env** |
+| **AUTH_TOKENS** | **Bearer Token配置(client_id:sha256[:user_id][:expires][:scopes]，分号分隔) / Token entries** | **(空/empty)** |
+| **AUTH_HMAC_KEYS** | **HMAC密钥配置(app_key:secret[:client_id][:user_id][:scopes]，分号分隔) / HMAC key entries** | **(空/empty)** |
+| AUTH_TOKEN_TABLE | db后端Token表名 / Token table (db backend) | mcp_auth_token |
+| AUTH_HMAC_KEY_TABLE | db后端HMAC密钥表名 / HMAC key table (db backend) | mcp_auth_key |
+| AUTH_TIMESTAMP_TOLERANCE | 签名时间戳允许偏差(秒) / Timestamp tolerance (sec) | 300 |
+| AUTH_NONCE_TTL | Nonce防重放窗口(秒) / Nonce TTL (sec) | 600 |
+| AUTH_EXEMPT_PATHS | 豁免鉴权路径(仅限探活) / Auth-exempt paths | /health |
+| **AUTH_BIND_USER** | **凭据user_id绑定行级权限(防伪造) / Bind credential user_id (anti-spoofing)** | **true** |
+| AUTH_MAX_FAILURES | 同IP连续失败封禁阈值 / Max failures before IP block | 10 |
+| AUTH_BLOCK_SECONDS | IP封禁时长(秒) / IP block duration (sec) | 600 |
+| AUTH_CREDENTIAL_CACHE_TTL | db凭据缓存TTL(秒) / Credential cache TTL (sec) | 60 |
+| SERVER_DEBUG | 服务器调试模式(生产强制关闭) / Server debug (forced off in production) | false |
 | LOG_LEVEL                | 日志级别(DEBUG/INFO/...) / Log level                 | DEBUG            |
 
 > 注/Note: 部分云MySQL需指定`DB_AUTH_PLUGIN`为`mysql_native_password`。
+> 
+> 注/Note: 鉴权凭据用 `python scripts/gen_token.py token|hmac-key --client-id xxx` 签发，明文仅显示一次；生产环境(`ENV_TYPE=production`)下 `ENABLE_AUTH=false` 时服务器拒绝启动。
+> Auth credentials are issued via `scripts/gen_token.py` (plaintext shown once). In production, the server refuses to start when `ENABLE_AUTH=false`.
 
 ### SSE 路由配置说明 / SSE Route Configuration
 
@@ -278,6 +316,12 @@ docker run -d \
 
 ## 7. 安全机制 / Security Mechanisms
 
+- **传输层Header鉴权**：所有请求必须在MCP会话建立前通过HTTP Header凭据校验，禁止明文参数校验
+- **Bearer Token模式**：服务端只存SHA-256哈希，恒定时间比较，支持过期/吊销/轮换
+- **HMAC签名模式**：METHOD+Path+Query+Timestamp+Nonce+BodyHash签名，时间窗±300s + Nonce防重放
+- **身份绑定**：凭据绑定的user_id注入行级权限链路，工具入参伪造他人身份直接拒绝
+- **防爆破**：同IP连续失败10次封禁600秒（429），审计日志只记凭据指纹不记明文
+- **fail-closed**：db凭据后端异常按认证失败处理；生产环境未启用鉴权拒绝启动
 - 多级SQL风险等级（LOW/MEDIUM/HIGH/CRITICAL）
 - SQL注入与危险操作拦截
 - WHERE子句强制检查
@@ -287,6 +331,12 @@ docker run -d \
 - 生产环境默认只允许低风险操作
 - **生产环境自动启用数据库隔离**
 
+- **Transport-layer Header Authentication**: All requests must pass HTTP Header credential verification before MCP session establishment; plaintext parameter checks are forbidden
+- **Bearer Token mode**: Server stores SHA-256 hashes only, constant-time comparison, expiry/revocation/rotation support
+- **HMAC signature mode**: Signs METHOD+Path+Query+Timestamp+Nonce+BodyHash with ±300s window and nonce anti-replay
+- **Identity Binding**: Credential-bound user_id feeds the row-level permission chain; spoofed tool parameters are rejected
+- **Anti-brute-force**: 10 consecutive failures per IP triggers a 600s block (429); audit logs record credential fingerprints only
+- **Fail-closed**: DB credential backend errors count as auth failures; production refuses to start without auth
 - Multi-level SQL risk levels (LOW/MEDIUM/HIGH/CRITICAL)
 - SQL injection & dangerous operation interception
 - Mandatory WHERE clause check
@@ -492,3 +542,86 @@ INFO - 🔒 修改后 SQL: SELECT * FROM orders WHERE status='pending' AND (gssq
 ```
 
 如果看到 "⚠️ 未提供 user_id 参数" 或 "查询不涉及权限控制表" 等警告，请根据提示修复配置。
+
+---
+
+## 15. MCP服务鉴权指南 / MCP Service Authentication Guide
+
+### 背景 / Background
+
+按网络安全整改要求：**所有 MCP 服务必须鉴权后使用，鉴权在 HTTP Header 校验层完成，禁止直接明文携带参数校验**。本服务通过纯 ASGI 中间件 `AuthMiddleware` 包装 FastMCP SSE 应用，在 MCP 会话建立前（GET /sse2 与 POST /messages/ 两条路由）完成校验，未通过鉴权的请求无法进入任何工具。
+
+Per security remediation: all MCP services require authentication at the HTTP Header verification layer; plaintext parameter checks are forbidden. A pure-ASGI `AuthMiddleware` wraps the FastMCP SSE app and verifies both routes (`GET /sse2`, `POST /messages/`) before any MCP session exists.
+
+### 双模式 / Dual Modes
+
+| 模式 / Mode | Header | 适用场景 / Use Case | 防重放 / Anti-replay |
+|------------|--------|--------------------|---------------------|
+| **Bearer Token** | `Authorization: Bearer <token>` | 百炼等只能配置静态Header的平台 / Platforms with static headers (e.g. Bailian) | Token可过期/吊销 / Expiry & revocation |
+| **HMAC 签名** | `X-Auth-Key` / `X-Auth-Timestamp` / `X-Auth-Nonce` / `X-Auth-Signature` | 自研后端/网关，可动态签名 / Own backends or gateways | 时间窗±300s + Nonce TTL 600s |
+
+HMAC 签名串格式 / HMAC string-to-sign format:
+```
+StringToSign = METHOD\nPath\nSortedQuery\nTimestamp\nNonce\nSHA256Hex(Body)
+Signature    = Base64(HMAC-SHA256(app_secret, StringToSign))
+```
+
+### 快速启用 / Quick Setup
+
+```bash
+# 1. 签发凭据（Token明文只显示一次，妥善保存）
+python scripts/gen_token.py token --client-id bailian-prod --user-id report_user
+python scripts/gen_token.py hmac-key --client-id bi-system
+
+# 2. 将脚本输出的配置行写入 .env
+#    AUTH_TOKENS=bailian-prod:<sha256hex>:report_user
+#    AUTH_HMAC_KEYS=ak_xxx:sk_xxx:bi-system
+
+# 3. 重启服务，验证鉴权生效
+curl -i http://127.0.0.1:3000/health   # 200（探活豁免）
+curl -i http://127.0.0.1:3000/sse2     # 401（无凭据被拒）
+```
+
+客户端接入示例见 `examples/client_with_auth.py`（Bearer + mcp SDK、HMAC 手工签名两种写法）。db 凭据后端建表 SQL 见 `docs/sql/auth_tables.sql`。
+
+Client examples: `examples/client_with_auth.py`. DB backend schema: `docs/sql/auth_tables.sql`.
+
+### 百炼平台配置 / Bailian Platform Configuration
+
+百炼只能配置静态 Header，使用 Bearer Token 模式：在百炼 MCP 服务配置的 Header 中添加
+
+Bailian supports static headers only — use Bearer Token mode:
+
+```
+Authorization: Bearer <签发时显示一次的Token明文>
+```
+
+### 身份绑定与行级权限联动 / Identity Binding & Row-Level Permissions
+
+启用 `AUTH_BIND_USER=true` 后，凭据签发时绑定的 `user_id` 在 `execute_query` 入口（`resolve_user_id`）优先生效：
+
+- 工具入参未传 `user_id` → 使用凭据绑定的身份注入行级权限过滤
+- 工具入参与凭据身份一致 → 正常放行
+- 工具入参伪造他人身份 → 抛出 `UserIdentityMismatchError` 拒绝执行
+
+With `AUTH_BIND_USER=true`, the credential-bound `user_id` overrides tool parameters at `resolve_user_id` (inside `execute_query`), closing the plaintext-`user_id` spoofing hole for row-level permissions.
+
+### 灰度上线 / Gradual Rollout
+
+通过 `AUTH_ENFORCE_MODE` 三档灰度，观察 `AUTH FAILED` 审计日志确认所有调用方已接入后，再切 `enforce`：
+
+| 模式 | 行为 / Behavior |
+|------|----------------|
+| `off` | 直接放行（仅本地调试）/ Pass-through (local debugging only) |
+| `audit` | 未鉴权只记日志不拦截（灰度观察）/ Log-only (observation) |
+| `enforce` | 拦截返回401/429（默认）/ Reject with 401/429 (default) |
+
+### 测试与文档 / Tests & Docs
+
+```bash
+python -m pytest tests/ -q   # 52 个用例：44 单元 + 8 集成（真实 uvicorn + FastMCP 端到端）
+```
+
+完整设计与威胁模型见 `docs/MCP服务鉴权整改开发方案.md`。
+
+Full design & threat model: `docs/MCP服务鉴权整改开发方案.md`.

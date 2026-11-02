@@ -12,6 +12,7 @@ from ..security.sql_analyzer import SQLOperationType
 from ..security.interceptor import SQLInterceptor, SecurityException
 from ..security.sql_parser import SQLParser
 from ..security.role_permission import get_role_permission_manager
+from ..security.auth.identity import resolve_user_id
 
 logger = logging.getLogger("mysql_server")
 
@@ -354,7 +355,8 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
         params: 查询参数 (可选)
         batch_size: 批处理大小，控制每次从游标获取的记录数量 (仅当stream_results=True时有效)
         stream_results: 是否使用流式处理获取大型结果集
-        user_id: 用户ID，用于角色权限控制 (可选)
+        user_id: 用户ID，用于角色权限控制 (可选；启用鉴权且凭据绑定user_id时，
+                 以鉴权身份为准，入参不一致将被拒绝)
 
     Returns:
         查询结果列表，如果是修改操作则返回影响的行数
@@ -368,6 +370,10 @@ async def execute_query(connection, query: str, params: Optional[Dict[str, Any]]
     start_time = time.time()  # 记录查询开始时间
 
     try:
+        # 鉴权身份解析：凭据绑定的 user_id 优先于工具入参，杜绝明文入参伪造行级权限
+        # （AUTH_BIND_USER=true 时入参与凭据不一致直接拒绝，见 src/security/auth/identity.py）
+        user_id = resolve_user_id(user_id)
+
         # 应用角色权限过滤
         logger.info(f"🔐 开始应用权限过滤 - user_id: {user_id}, 原始查询: {query[:100]}...")
         permission_manager = get_role_permission_manager()

@@ -9,9 +9,9 @@ vendor/
 .cursorrules
 .cursor
 **/__pycache__/
-tests/
 .env
 .coverage
-docs/
 .pytest_cache/
+mysql_server.log
+smoke_server.out
 requirements-dev.txt

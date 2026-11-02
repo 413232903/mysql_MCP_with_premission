@@ -14,7 +14,8 @@ from pathlib import Path
 load_dotenv()
 
 # 导入自定义模块 - 确保在load_dotenv之后导入
-from src.config import ServerConfig, SecurityConfig, DatabaseConfig, ConnectionPoolConfig
+from src.config import (ServerConfig, SecurityConfig, DatabaseConfig,
+                        ConnectionPoolConfig, AuthConfig, EnvironmentType)
 from src.tools.mysql_tool import register_mysql_tool
 from src.tools.mysql_metadata_tool import register_metadata_tools
 from src.tools.mysql_info_tool import register_info_tools
@@ -91,14 +92,15 @@ logger.debug(
     sse_path,
 )
 
-# 创建MCP服务器实例
+# 创建MCP服务器实例（调试模式由 SERVER_DEBUG 控制，生产环境强制关闭）
 logger.debug("正在创建MCP服务器实例...")
+debug_mode = ServerConfig.DEBUG and SecurityConfig.ENV_TYPE != EnvironmentType.PRODUCTION
 mcp = FastMCP(
     "MySQL Query Server",
-    "cccccccccc",
+    instructions="MySQL 查询 MCP 服务（SSE 传输），提供带多层安全机制与行级权限控制的数据库查询能力。",
     host=host,
     port=port,
-    debug=True,
+    debug=debug_mode,
     mount_path=mount_path,
     sse_path=sse_path,
 )
@@ -219,26 +221,75 @@ async def init_database():
         logger.error(f"数据库连接池初始化失败: {str(e)}")
         print(f"警告: 数据库连接池初始化失败: {str(e)}")
 
+def _build_asgi_app():
+    """构建带鉴权中间件与健康检查路由的 ASGI 应用（替代 mcp.run('sse') 直跑）
+
+    结构: HealthApp( AuthMiddleware( FastMCP sse_app ) )
+    - /health 探活在鉴权之外直接应答
+    - 其余全部请求先经 Header 鉴权（Bearer Token / HMAC 签名），再进入 MCP 路由
+    """
+    # 兼容不同 mcp 版本的 sse_app 签名：
+    # - 新版本: sse_app(mount_path)，内部处理挂载路径
+    # - 旧版本: sse_app() 返回裸 SSE 应用，需自行包一层 Mount
+    if 'mount_path' in inspect.signature(mcp.sse_app).parameters:
+        sse_starlette = mcp.sse_app(mount_path)
+    else:  # pragma: no cover - 兼容旧版 mcp SDK
+        sse_starlette = mcp.sse_app()
+        if mount_path != '/':
+            from starlette.applications import Starlette
+            from starlette.routing import Mount
+            sse_starlette = Starlette(routes=[Mount(mount_path, app=sse_starlette)])
+
+    app = sse_starlette
+    if AuthConfig.ENABLED:
+        from src.security.auth import AuthMiddleware
+        auth_settings = AuthConfig.get_config()
+        app = AuthMiddleware(app, settings=auth_settings)
+        logger.info(
+            "MCP服务鉴权已启用: mode=%s enforce_mode=%s bind_user=%s token_backend=%s",
+            auth_settings.mode, auth_settings.enforce_mode,
+            auth_settings.bind_user, auth_settings.token_backend)
+    else:
+        logger.warning(
+            "MCP服务鉴权未启用(ENABLE_AUTH=false)！任何能访问本服务的客户端均可调用全部工具，"
+            "生产环境禁止此配置")
+
+    from src.security.auth import HealthApp
+    return HealthApp(app)
+
+
 def start_server():
     """启动SSE服务器的同步包装器"""
     logger.debug("开始启动MySQL查询服务器...")
+
+    # 生产环境必须启用服务鉴权（安全整改要求，fail-fast 拒绝启动）
+    if SecurityConfig.ENV_TYPE == EnvironmentType.PRODUCTION and not AuthConfig.ENABLED:
+        message = ("生产环境(ENV_TYPE=production)必须启用MCP服务鉴权: "
+                   "请设置 ENABLE_AUTH=true 并配置 AUTH_TOKENS / AUTH_HMAC_KEYS "
+                   "(使用 scripts/gen_token.py 生成凭据)")
+        logger.critical(message)
+        raise RuntimeError(message)
 
     print(f"开始启动MySQL查询SSE服务器...")
     full_path = f"{mount_path.rstrip('/')}{sse_path}"
     if not full_path:
         full_path = '/'  # 理论不会出现，因为 sse_path 不允许 '/'
     print(f"服务器监听在 {host}:{port}{full_path}")
-    
+    print(f"健康检查端点: {host}:{port}/health")
+    print(f"服务鉴权: {'已启用 (' + AuthConfig.MODE + '/' + AuthConfig.ENFORCE_MODE + ')' if AuthConfig.ENABLED else '未启用（警告）'}")
+
     try:
         # 检查MySQL配置是否有效并初始化连接池
         if mysql_available:
             # 使用事件循环执行异步初始化函数
             _server_data['loop'] = asyncio.get_event_loop()
             _server_data['loop'].run_until_complete(init_database())
-        
-        # 使用run_app函数启动服务器
-        logger.debug("调用 mcp.run('sse', mount_path=%s) 启动服务器...", mount_path)
-        mcp.run('sse', mount_path=mount_path)
+
+        # 构建带鉴权中间件的应用，用 uvicorn 启动（与原 mcp.run('sse') 行为一致）
+        app = _build_asgi_app()
+        logger.debug("启动 uvicorn 服务器 (mount_path=%s, sse_path=%s)...", mount_path, sse_path)
+        import uvicorn
+        uvicorn.run(app, host=host, port=port)
     except Exception as e:
         logger.exception(f"服务器运行时发生错误: {str(e)}")
         print(f"服务器运行时发生错误: {str(e)}")
